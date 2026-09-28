@@ -162,3 +162,31 @@ def test_channel_breakout_enters_on_the_first_close_beyond_the_channel(m1):
     assert len(sig) and longs.any() and (~longs).any()
     assert (row["close"].to_numpy()[longs] > prior_hi[longs]).all()
     assert (row["close"].to_numpy()[~longs] < prior_lo[~longs]).all()
+
+
+@pytest.mark.parametrize("fix,tz,hhmm,exit_tz,exit_hhmm", [
+    ("tokyo", "Asia/Tokyo", 600, sessions.NEW_YORK, 120),
+    ("ecb", "Europe/Berlin", 855, sessions.LONDON, 960),
+    ("london", sessions.LONDON, 960, sessions.NEW_YORK, 990),
+])
+def test_fix_reversal_fades_the_last_hour_at_the_fix(feats, fix, tz, hhmm, exit_tz, exit_hhmm):
+    sig = SETUPS["fix_reversal"].signals(feats, {"fix": fix})
+    t = pd.DatetimeIndex(sig["decision_time"])
+    assert len(sig) and (sessions.local_minutes(t, tz) == hhmm).all()
+    close = feats.set_index("close_time")["close"]
+    move = close.reindex(t).to_numpy() - close.reindex(t - pd.Timedelta(hours=1)).to_numpy()
+    assert (sig["direction"].to_numpy() == -np.sign(move)).all()
+    ex = pd.DatetimeIndex(sig["exit_by"])
+    assert (ex > t).all() and (ex - t < pd.Timedelta(hours=12)).all()
+    assert (sessions.local_minutes(ex, exit_tz) == exit_hhmm).all()
+    # Stops are sl_atr H1 ATRs away, on the losing side.
+    h1_atr = feats.set_index("close_time")["h1_atr"].reindex(t).to_numpy()
+    dist = sig["direction"].to_numpy() * (close.reindex(t).to_numpy() - sig["stop"].to_numpy())
+    assert dist == pytest.approx(1.5 * h1_atr)
+
+
+def test_fix_reversal_move_filter_keeps_a_subset(feats):
+    s = SETUPS["fix_reversal"]
+    all_, big = s.signals(feats, {"fix": "london"}), s.signals(feats, {"fix": "london", "min_move_atr": 0.5})
+    assert 0 < len(big) < len(all_)
+    assert set(pd.DatetimeIndex(big["decision_time"])) <= set(pd.DatetimeIndex(all_["decision_time"]))

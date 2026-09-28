@@ -19,6 +19,10 @@ SYMBOLS: dict[str, SymbolSpec] = {
     "EURUSD": SymbolSpec("EURUSD", 100_000, 0.0001),
     "GBPUSD": SymbolSpec("GBPUSD", 100_000, 0.0001),
     "USDJPY": SymbolSpec("USDJPY", 1_000, 0.01),
+    "AUDUSD": SymbolSpec("AUDUSD", 100_000, 0.0001),
+    "NZDUSD": SymbolSpec("NZDUSD", 100_000, 0.0001),
+    "USDCAD": SymbolSpec("USDCAD", 100_000, 0.0001),
+    "USDCHF": SymbolSpec("USDCHF", 100_000, 0.0001),
     "XAUUSD": SymbolSpec("XAUUSD", 1_000, 0.1),
 }
 

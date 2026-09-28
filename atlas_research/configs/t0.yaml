@@ -25,6 +25,12 @@ costs:
   per_symbol:
     EURUSD: {commission_rt: 0.00007, entry_slippage: 0.00001, stop_slippage: 0.00002, swap_per_rollover: 0.00005}
     GBPUSD: {commission_rt: 0.00007, entry_slippage: 0.00001, stop_slippage: 0.00002, swap_per_rollover: 0.00006}
+    # Round 4 pairs. $7/lot round turn converted to quote units at a typical price; slippage 0.1/0.2 pip.
+    USDJPY: {commission_rt: 0.0100, entry_slippage: 0.001, stop_slippage: 0.002, swap_per_rollover: 0.006}
+    AUDUSD: {commission_rt: 0.00007, entry_slippage: 0.00001, stop_slippage: 0.00002, swap_per_rollover: 0.00005}
+    NZDUSD: {commission_rt: 0.00007, entry_slippage: 0.00001, stop_slippage: 0.00002, swap_per_rollover: 0.00005}
+    USDCAD: {commission_rt: 0.000095, entry_slippage: 0.00001, stop_slippage: 0.00002, swap_per_rollover: 0.00006}
+    USDCHF: {commission_rt: 0.000065, entry_slippage: 0.00001, stop_slippage: 0.00002, swap_per_rollover: 0.00005}
 
 exits:          # T0 baseline; exit research is T1
   rr: 2.0
@@ -126,3 +132,9 @@ strategies:
     grid:
       entry_hour: [12, 13]
       exit_hour: [16, 20]
+  fix_reversal:
+    hypothesis: "The last hour's move into a daily FX fix reverses over the next window (Krohn, Mueller and Whelan 2024), far enough to pay after costs when faded at the fix with a 1.5 H1-ATR stop."
+    symbols: [EURUSD, GBPUSD, USDJPY, AUDUSD, NZDUSD, USDCAD, USDCHF]
+    grid:
+      fix: [tokyo, ecb, london]
+      min_move_atr: [0.0, 0.5]

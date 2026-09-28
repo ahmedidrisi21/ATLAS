@@ -16,7 +16,7 @@ research more (§26); the engine is not built around a strategy without edge.
 | Bid/ask M1 trade simulator with stressed spread, commission, slippage, swap | Built |
 | Walk-forward, validation pass, §15 gates, §22 robustness checks | Built |
 | Experiment registry with monthly budget and trial counting for the deflated Sharpe | Built |
-| Run on real 2019–mid-2025 data | **Done 2026-09-23: all three setups fail (see Results)** |
+| Run on real 2019–mid-2025 data | **Done 2026-09-23: all three setups fail (see Results)**; rounds 2–4 also fail |
 
 ## Results (2026-09-23, real Dukascopy data)
 
@@ -81,6 +81,30 @@ Approved by the operator and declared (commit c6821c1) before any run.
   before costs, on both dev (−0.057 R) and validation (−0.029 R).
 
 **T0 exit gate still not met after eight strategies (five setups, three timeframes).**
+
+### Round 4: fix reversal on seven dollar pairs (2026-09-28)
+
+Chosen by the operator from a literature search and declared (commit 5c2659c)
+before any run. Setup `fix_reversal` fades the last hour's move into the
+Tokyo, ECB or London fix (Krohn, Mueller and Whelan, JF 2024) and exits at the
+end of the paper's next window. Grid: fix × min_move_atr (6 points). Pairs:
+EURUSD, GBPUSD, USDJPY, AUDUSD, NZDUSD, USDCAD, USDCHF (all 16.9M M1 bars
+clean: no crossed quotes or OHLC errors).
+
+| Strategy | OOS trades | After costs | After spread, before fees | Spread-free (mid) | Random-entry mean / p95 | Gates failed |
+| --- | --- | --- | --- | --- | --- | --- |
+| fix_reversal | 5,089 | −0.090 R | −0.055 R | +0.003 R | −0.255 / −0.235 R | 11 of 14 |
+
+- **No edge at the mid price.** Faded at the fix, the next window's move is
+  +0.003 R on average: the stressed spread (≈0.06 R) and fees (≈0.04 R) turn
+  that into −0.09 R. Every year and every pair is negative after costs;
+  EURUSD is the least bad (−0.033 R). The paper already warned that the
+  pattern is a few basis points a day and loses at full spreads.
+- Validation picked the ECB fix with min_move_atr 0.5 (−0.071 R, PF 0.85).
+- It beats random entries by a wide margin only because random entries at
+  the same holding times land in wide-spread hours; that is not an edge.
+
+**T0 exit gate still not met after nine strategies (six setups).**
 
 ## Running it
 

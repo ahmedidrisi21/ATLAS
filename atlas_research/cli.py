@@ -3,6 +3,7 @@
     atlas-research data download --symbols EURUSD GBPUSD
     atlas-research data build    --symbols EURUSD GBPUSD
     atlas-research data quality  --symbols EURUSD GBPUSD
+    atlas-research data rates
     atlas-research data import-mt5 --symbol EURUSD --file EURUSD_M1.csv
     atlas-research t0 run --all
 """
@@ -46,6 +47,14 @@ def cmd_download(args, cfg) -> None:
     for sym in args.symbols:
         n = dukascopy.download_range(sym, s, e, Path(cfg["data"]["raw_cache"]), workers=args.workers)
         print(f"{sym}: fetched {n} day-files for {s}..{e}")
+
+
+def cmd_rates(args, cfg) -> None:
+    from atlas_engine.market_data import rates
+
+    s, e = _dates(cfg, args.start, args.end)
+    path = rates.download(Path(cfg["data"]["rates"]), s - dt.timedelta(days=365), e)
+    print(f"policy rates {s - dt.timedelta(days=365)}..{e} -> {path}")
 
 
 def cmd_build(args, cfg) -> None:
@@ -113,7 +122,7 @@ def main(argv: list[str] | None = None) -> None:
     sub = ap.add_subparsers(dest="group", required=True)
 
     d = sub.add_parser("data").add_subparsers(dest="cmd", required=True)
-    for name, fn in (("download", cmd_download), ("build", cmd_build), ("quality", cmd_quality), ("synthetic", cmd_synthetic)):
+    for name, fn in (("download", cmd_download), ("build", cmd_build), ("quality", cmd_quality), ("synthetic", cmd_synthetic), ("rates", cmd_rates)):
         p = d.add_parser(name)
         p.add_argument("--symbols", nargs="+", default=["EURUSD", "GBPUSD"])
         p.add_argument("--start")

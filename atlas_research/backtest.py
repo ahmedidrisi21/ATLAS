@@ -7,7 +7,10 @@
 - SL and TP touched in the same M1 bar count as SL. A bar that opens beyond
   the stop fills at that open (gap), plus stop slippage.
 - One position per setup per symbol: signals during an open trade are skipped.
-- Commission and swap are charged in price units and converted to R.
+- Commission and swap are charged in price units and converted to R. Swap is
+  a flat charge per night, or, when the cost model has ``swap_markup_pct`` and
+  the signal carries ``carry`` (base minus quote rate, % a year), the carry the
+  position earns or pays each night less the broker's markup.
 - Optional Friday flatten closes at market at the first bar at/after the cutoff.
 - A signal may carry ``exit_by``: the trade closes at market at the first bar
   at/after that time if neither stop nor target has been hit (time exit).
@@ -18,7 +21,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import numpy as np
 import pandas as pd
@@ -42,9 +45,16 @@ class CostModel:
     stop_slippage: float = 0.00002  # stop exits
     swap_per_rollover: float = 0.00005  # charged on both sides, conservative
     triple_swap_weekday: int = 2  # Wednesday rollover charges three nights
+    swap_markup_pct: float | None = None  # set: swap from the signal's carry, less this markup (% a year)
 
     def with_spread(self, mult: float) -> "CostModel":
-        return CostModel(mult, self.commission_rt, self.entry_slippage, self.stop_slippage, self.swap_per_rollover, self.triple_swap_weekday)
+        return replace(self, spread_mult=mult)
+
+    def swap_per_night(self, direction: int, carry_pct: float, price: float) -> float:
+        """Swap charged per night in price units (negative when the position earns carry)."""
+        if self.swap_markup_pct is None or not np.isfinite(carry_pct):
+            return self.swap_per_rollover
+        return (self.swap_markup_pct - direction * carry_pct) / 100 * price / 365
 
 
 @dataclass(frozen=True)
@@ -99,8 +109,9 @@ def simulate(
     rows = []
     sig = signals.sort_values("decision_time")
     exit_by = (pd.DatetimeIndex(sig["exit_by"]).as_unit("ns").asi8 if "exit_by" in sig else np.full(len(sig), NO_EXIT_BY))
-    cols = (pd.DatetimeIndex(sig["decision_time"]).as_unit("ns").asi8, sig["direction"], sig["stop"], sig["atr"], sig["setup"], exit_by)
-    for dt_, d, stop, atr, setup, t_exit in zip(*cols):
+    carry = sig["carry"].to_numpy(float) if "carry" in sig else np.full(len(sig), np.nan)
+    cols = (pd.DatetimeIndex(sig["decision_time"]).as_unit("ns").asi8, sig["direction"], sig["stop"], sig["atr"], sig["setup"], exit_by, carry)
+    for dt_, d, stop, atr, setup, t_exit, carry_pct in zip(*cols):
         i0 = int(np.searchsorted(p.t, dt_, side="left"))
         if i0 >= n or p.t[i0] - dt_ > max_delay or p.t[i0] < busy_until:
             continue
@@ -121,7 +132,7 @@ def simulate(
         entry_time, exit_time = p.index[i0], p.index[j]
         nights = count_rollovers(entry_time, exit_time, costs.triple_swap_weekday)
         r_gross = d * (exit_px - entry) / risk
-        cost_r = (costs.commission_rt + nights * costs.swap_per_rollover) / risk
+        cost_r = (costs.commission_rt + nights * costs.swap_per_night(d, carry_pct, entry)) / risk
         rows.append(
             (symbol, setup, d, pd.Timestamp(dt_, tz="UTC"), atr, entry_time, exit_time, entry, stop, target, exit_px, risk,
              reason, r_gross, cost_r, r_gross - cost_r, max(fav, 0.0) / risk, max(adv, 0.0) / risk,

@@ -190,3 +190,26 @@ def test_fix_reversal_move_filter_keeps_a_subset(feats):
     all_, big = s.signals(feats, {"fix": "london"}), s.signals(feats, {"fix": "london", "min_move_atr": 0.5})
     assert 0 < len(big) < len(all_)
     assert set(pd.DatetimeIndex(big["decision_time"])) <= set(pd.DatetimeIndex(all_["decision_time"]))
+
+
+def test_policy_rate_carry_uses_the_previous_day(tmp_path):
+    from atlas_engine.market_data import rates
+
+    csv = tmp_path / "cbpol.csv"
+    rows = ["REF_AREA,TIME_PERIOD,OBS_VALUE"]
+    for day, us, xm in (("2022-07-26", 1.75, 0.5), ("2022-07-27", 2.50, 0.5), ("2022-07-28", 2.50, 0.5)):
+        rows += [f"US,{day},{us}", f"XM,{day},{xm}"]
+    csv.write_text("\n".join(rows) + "\n")
+    r = rates.load(csv)
+    t = pd.DatetimeIndex(["2022-07-27 20:00", "2022-07-28 01:00"], tz="UTC")
+    # EURUSD carry = EUR - USD; the 27 July hike only counts from 28 July.
+    assert rates.carry(r, "EURUSD", t).tolist() == [-1.25, -2.0]
+
+
+def test_channel_breakout_carry_filter_keeps_only_carry_earning_directions(m1):
+    f = build_features(m1, FeatureConfig(bar="4h"))
+    f["carry"] = np.where(f.index.month % 2 == 0, 2.0, -2.0)  # positive carry favours longs
+    sig = SETUPS["channel_breakout"].signals(f, {"channel": 20, "min_carry": 1.0})
+    assert len(sig) and ((sig["direction"] * sig["carry"]) >= 1.0).all()
+    unfiltered = SETUPS["channel_breakout"].signals(f, {"channel": 20})
+    assert len(unfiltered) > len(sig) and "carry" in unfiltered

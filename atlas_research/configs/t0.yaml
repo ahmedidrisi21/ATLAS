@@ -6,6 +6,7 @@ data:
   source: dukascopy
   root: data
   raw_cache: data/raw/dukascopy
+  rates: data/rates/cbpol_d.csv   # BIS central bank policy rates, for carry
 
 segments:
   dev: ["2019-01-01", "2024-01-01"]
@@ -150,3 +151,18 @@ strategies:
     grid:
       channel: [120, 240]   # H4 bars: 20 and 40 trading days
       sl_atr: [4.0, 6.0]    # H4 ATRs, about 1.6 and 2.4 daily ATRs
+  carry_trend_d1:
+    setup: channel_breakout
+    bar: 4h
+    hypothesis: "Round 5's swing breakout, taken only when its direction earns at least 0.5% a year of policy-rate carry, pays after costs: trend and carry agree, and swap is earned rather than paid."
+    symbols: [EURUSD, GBPUSD, USDJPY, AUDUSD, NZDUSD, USDCAD, USDCHF]
+    exits:            # same swing exits as channel_breakout_d1
+      rr: null
+      friday_flatten_utc: null
+      trail: true
+    carry:
+      swap_markup_pct: 1.0   # swap = carry earned or paid less a 1%/yr broker markup, both sides (BIS policy rates)
+    grid:
+      channel: [120, 240]   # H4 bars: 20 and 40 trading days
+      sl_atr: [4.0, 6.0]    # H4 ATRs
+      min_carry: [0.5]      # % a year in the trade's favour

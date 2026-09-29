@@ -26,6 +26,7 @@ import pandas as pd
 
 from atlas_engine.features import sessions
 from atlas_engine.features.frame import FeatureConfig, build_features
+from atlas_engine.market_data import rates as rate_data
 from atlas_engine.setups import SETUPS, EdgeFilters, Setup
 
 from . import metrics
@@ -110,10 +111,14 @@ def _concat(parts: list[pd.DataFrame]) -> pd.DataFrame:
     return pd.concat(parts, ignore_index=True).sort_values("entry_time", ignore_index=True)
 
 
-def prepare_market(symbol: str, m1: pd.DataFrame, cfg: dict, bar: str = "15min") -> Market:
+def prepare_market(symbol: str, m1: pd.DataFrame, cfg: dict, bar: str = "15min", rates: pd.DataFrame | None = None,
+                   swap_markup_pct: float | None = None) -> Market:
     c = cfg["costs"]["per_symbol"][symbol]
-    costs = CostModel(spread_mult=cfg["costs"]["spread_mult"], **c)
-    return Market(symbol, m1, build_features(m1, FeatureConfig(bar=bar)), costs, {})
+    costs = CostModel(spread_mult=cfg["costs"]["spread_mult"], swap_markup_pct=swap_markup_pct, **c)
+    f = build_features(m1, FeatureConfig(bar=bar))
+    if rates is not None:
+        f["carry"] = rate_data.carry(rates, symbol, pd.DatetimeIndex(f["close_time"])).to_numpy()
+    return Market(symbol, m1, f, costs, {})
 
 
 def select(trades_by_point: list[pd.DataFrame], w: Window, min_trades: int) -> int | None:
@@ -179,6 +184,8 @@ def random_control(runner: Runner, reference: pd.DataFrame, windows: list[Window
                     "setup": "random_control",
                 }
             )
+            if "carry" in rows:
+                sig["carry"] = rows["carry"].to_numpy()
             if len(holds):
                 sig["exit_by"] = sig["decision_time"] + rng.choice(holds, size=len(rows))
             sigs[sym] = sig
@@ -213,7 +220,11 @@ def run_t0(
     dev: Window = tuple(_ts(x) for x in cfg["segments"]["dev"])
     val: Window = tuple(_ts(x) for x in cfg["segments"]["validation"])
 
-    markets = [prepare_market(s, load_m1(s, dev[0], val[1]), cfg, bar) for s in scfg["symbols"]]
+    # Carry strategies load policy rates and pay or earn swap from them (PRD §22 costs).
+    carry_cfg = scfg.get("carry")
+    rates = rate_data.load(Path(cfg["data"]["rates"])) if carry_cfg else None
+    markup = carry_cfg["swap_markup_pct"] if carry_cfg else None
+    markets = [prepare_market(s, load_m1(s, dev[0], val[1]), cfg, bar, rates, markup) for s in scfg["symbols"]]
     # A strategy may override the T0 baseline exits (e.g. a trend-following trail).
     exits = ExitPolicy(**{**cfg["exits"], **scfg.get("exits", {})})
     filters = EdgeFilters(**cfg["filters"])

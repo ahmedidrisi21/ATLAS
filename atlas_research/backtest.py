@@ -11,6 +11,9 @@
 - Optional Friday flatten closes at market at the first bar at/after the cutoff.
 - A signal may carry ``exit_by``: the trade closes at market at the first bar
   at/after that time if neither stop nor target has been hit (time exit).
+- ``rr=None`` sets no profit target. With ``trail=True`` the stop follows the
+  best price reached on earlier bars at the initial risk distance, and never
+  loosens (a trend-following exit).
 """
 
 from __future__ import annotations
@@ -46,8 +49,9 @@ class CostModel:
 
 @dataclass(frozen=True)
 class ExitPolicy:
-    rr: float = 2.0
+    rr: float | None = 2.0
     friday_flatten_utc: str | None = "20:00"
+    trail: bool = False
     max_entry_delay_min: int = 5
 
 
@@ -107,8 +111,8 @@ def simulate(
         risk = d * (entry - stop)
         if risk <= 0:
             continue
-        target = entry + d * exits.rr * risk
-        j, exit_px, reason = _scan(p, i0, d, stop, target, fri, costs.stop_slippage, t_exit)
+        target = entry + d * exits.rr * risk if exits.rr else d * np.inf
+        j, exit_px, reason = _scan(p, i0, d, stop, target, fri, costs.stop_slippage, t_exit, risk if exits.trail else 0.0)
         busy_until = p.t[j] + 1
         hi = p.bid_h if d == 1 else p.ask_h
         lo = p.bid_l if d == 1 else p.ask_l
@@ -127,18 +131,30 @@ def simulate(
 
 
 def _scan(p: M1Path, i0: int, d: int, stop: float, target: float, fri: np.ndarray | None, stop_slip: float,
-          t_exit: int = NO_EXIT_BY):
-    """Find the exit bar. Returns (index, fill price, reason)."""
+          t_exit: int = NO_EXIT_BY, trail: float = 0.0):
+    """Find the exit bar. Returns (index, fill price, reason).
+
+    With ``trail`` > 0 the stop on each bar is the initial stop or the best
+    price of the earlier bars minus ``trail``, whichever is tighter.
+    """
     n = len(p.t)
     chunk = 2048
     start = i0
+    best = -np.inf  # best favourable price (in direction d) before ``start``
     while start < n:
         end = min(start + chunk, n)
+        if trail > 0:
+            fav = p.bid_h[start:end] if d == 1 else -p.ask_l[start:end]
+            run = np.maximum.accumulate(np.concatenate(([best], fav)))
+            prev_best, best = run[:-1], run[-1]
+            stops = np.maximum(d * stop, prev_best - trail) * d  # tighter of initial and trailing
+        else:
+            stops = np.full(end - start, stop)
         if d == 1:
-            sl = p.bid_l[start:end] <= stop
+            sl = p.bid_l[start:end] <= stops
             tp = p.bid_h[start:end] >= target
         else:
-            sl = p.ask_h[start:end] >= stop
+            sl = p.ask_h[start:end] >= stops
             tp = p.ask_l[start:end] <= target
         flat = fri[start:end].copy() if fri is not None else np.zeros(end - start, bool)
         timed = p.t[start:end] >= t_exit
@@ -150,10 +166,12 @@ def _scan(p: M1Path, i0: int, d: int, stop: float, target: float, fri: np.ndarra
             k = int(np.argmax(hit))
             j = start + k
             if sl[k]:
+                s = stops[k]
                 o = p.bid_o[j] if d == 1 else p.ask_o[j]
-                gapped = j > i0 and d * (o - stop) < 0
-                px = (o if gapped else stop) - d * stop_slip
-                return j, px, "gap_stop" if gapped else "stop"
+                gapped = j > i0 and d * (o - s) < 0
+                px = (o if gapped else s) - d * stop_slip
+                trailed = d * (s - stop) > 0
+                return j, px, ("gap_" if gapped else "") + ("trail_stop" if trailed else "stop")
             if tp[k]:
                 return j, target, "target"
             return j, (p.bid_o[j] if d == 1 else p.ask_o[j]), "friday_flatten" if flat[k] else "time_exit"

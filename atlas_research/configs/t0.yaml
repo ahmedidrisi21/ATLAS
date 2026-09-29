@@ -138,3 +138,15 @@ strategies:
     grid:
       fix: [tokyo, ecb, london]
       min_move_atr: [0.0, 0.5]
+  channel_breakout_d1:
+    setup: channel_breakout
+    bar: 4h
+    hypothesis: "A close beyond the 20- or 40-trading-day high or low starts a multi-week trend (time-series momentum). Held over weekends with no profit cap and a stop trailing at the initial risk, the winners pay for the many small losses after costs."
+    symbols: [EURUSD, GBPUSD, USDJPY, AUDUSD, NZDUSD, USDCAD, USDCHF]
+    exits:            # swing exits for this strategy only; the T0 baseline stays 2R + Friday flatten
+      rr: null
+      friday_flatten_utc: null
+      trail: true
+    grid:
+      channel: [120, 240]   # H4 bars: 20 and 40 trading days
+      sl_atr: [4.0, 6.0]    # H4 ATRs, about 1.6 and 2.4 daily ATRs

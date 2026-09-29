@@ -134,3 +134,32 @@ def test_signals_without_exit_by_are_unchanged():
     m1 = path([(1.1000, 1.1005, 1.0998, 1.1004), (1.1004, 1.1023, 1.1003, 1.1020)])
     t = simulate(signal(1, 1.0991), m1, NO_COSTS).iloc[0]
     assert t["exit_reason"] == "target" and pd.isna(t["exit_by"])
+
+
+TREND = ExitPolicy(rr=None, friday_flatten_utc=None, trail=True)
+
+
+def test_trailing_stop_follows_earlier_highs_and_locks_in_profit():
+    # Long: entry ask 1.1001, stop 1.0991, risk 0.0010. The bid runs to 1.1049,
+    # so the trail sits at 1.1039; the next bar's bid low 1.1034 takes it out there.
+    m1 = path([(1.1000, 1.1002, 1.0999, 1.1000), (1.1000, 1.1050, 1.1000, 1.1045), (1.1045, 1.1046, 1.1035, 1.1040)])
+    t = simulate(signal(1, 1.0991), m1, NO_COSTS, TREND).iloc[0]
+    assert t["exit_reason"] == "trail_stop"
+    assert t["exit"] == pytest.approx(1.1039)
+    assert t["r"] == pytest.approx(3.8)
+
+
+def test_trailing_stop_never_uses_the_current_bars_high():
+    # One bar makes a new high and falls back inside it; the trail is still at the initial stop.
+    m1 = path([(1.1000, 1.1002, 1.0999, 1.1000), (1.1000, 1.1050, 1.0995, 1.1000)])
+    t = simulate(signal(1, 1.0991), m1, NO_COSTS, TREND).iloc[0]
+    assert t["exit_reason"] == "end_of_data"
+
+
+def test_short_trailing_stop_and_no_target():
+    # Short: entry bid 1.0999, stop 1.1009, risk 0.0010. The ask falls to 1.0951; trail at 1.0961.
+    m1 = path([(1.1000, 1.1001, 1.0998, 1.1000), (1.1000, 1.1000, 1.0950, 1.0955), (1.0955, 1.0965, 1.0952, 1.0960)])
+    t = simulate(signal(-1, 1.1009), m1, NO_COSTS, TREND).iloc[0]
+    assert t["exit_reason"] == "trail_stop"
+    assert t["exit"] == pytest.approx(1.0961)
+    assert t["r"] == pytest.approx(3.8)

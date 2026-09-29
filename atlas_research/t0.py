@@ -214,7 +214,8 @@ def run_t0(
     val: Window = tuple(_ts(x) for x in cfg["segments"]["validation"])
 
     markets = [prepare_market(s, load_m1(s, dev[0], val[1]), cfg, bar) for s in scfg["symbols"]]
-    exits = ExitPolicy(rr=cfg["exits"]["rr"], friday_flatten_utc=cfg["exits"]["friday_flatten_utc"])
+    # A strategy may override the T0 baseline exits (e.g. a trend-following trail).
+    exits = ExitPolicy(**{**cfg["exits"], **scfg.get("exits", {})})
     filters = EdgeFilters(**cfg["filters"])
     runner = Runner(setup, markets, exits, filters)
     base_mult = cfg["costs"]["spread_mult"]

@@ -162,3 +162,54 @@ def test_channel_breakout_enters_on_the_first_close_beyond_the_channel(m1):
     assert len(sig) and longs.any() and (~longs).any()
     assert (row["close"].to_numpy()[longs] > prior_hi[longs]).all()
     assert (row["close"].to_numpy()[~longs] < prior_lo[~longs]).all()
+
+
+@pytest.mark.parametrize("fix,tz,hhmm,exit_tz,exit_hhmm", [
+    ("tokyo", "Asia/Tokyo", 600, sessions.NEW_YORK, 120),
+    ("ecb", "Europe/Berlin", 855, sessions.LONDON, 960),
+    ("london", sessions.LONDON, 960, sessions.NEW_YORK, 990),
+])
+def test_fix_reversal_fades_the_last_hour_at_the_fix(feats, fix, tz, hhmm, exit_tz, exit_hhmm):
+    sig = SETUPS["fix_reversal"].signals(feats, {"fix": fix})
+    t = pd.DatetimeIndex(sig["decision_time"])
+    assert len(sig) and (sessions.local_minutes(t, tz) == hhmm).all()
+    close = feats.set_index("close_time")["close"]
+    move = close.reindex(t).to_numpy() - close.reindex(t - pd.Timedelta(hours=1)).to_numpy()
+    assert (sig["direction"].to_numpy() == -np.sign(move)).all()
+    ex = pd.DatetimeIndex(sig["exit_by"])
+    assert (ex > t).all() and (ex - t < pd.Timedelta(hours=12)).all()
+    assert (sessions.local_minutes(ex, exit_tz) == exit_hhmm).all()
+    # Stops are sl_atr H1 ATRs away, on the losing side.
+    h1_atr = feats.set_index("close_time")["h1_atr"].reindex(t).to_numpy()
+    dist = sig["direction"].to_numpy() * (close.reindex(t).to_numpy() - sig["stop"].to_numpy())
+    assert dist == pytest.approx(1.5 * h1_atr)
+
+
+def test_fix_reversal_move_filter_keeps_a_subset(feats):
+    s = SETUPS["fix_reversal"]
+    all_, big = s.signals(feats, {"fix": "london"}), s.signals(feats, {"fix": "london", "min_move_atr": 0.5})
+    assert 0 < len(big) < len(all_)
+    assert set(pd.DatetimeIndex(big["decision_time"])) <= set(pd.DatetimeIndex(all_["decision_time"]))
+
+
+def test_policy_rate_carry_uses_the_previous_day(tmp_path):
+    from atlas_engine.market_data import rates
+
+    csv = tmp_path / "cbpol.csv"
+    rows = ["REF_AREA,TIME_PERIOD,OBS_VALUE"]
+    for day, us, xm in (("2022-07-26", 1.75, 0.5), ("2022-07-27", 2.50, 0.5), ("2022-07-28", 2.50, 0.5)):
+        rows += [f"US,{day},{us}", f"XM,{day},{xm}"]
+    csv.write_text("\n".join(rows) + "\n")
+    r = rates.load(csv)
+    t = pd.DatetimeIndex(["2022-07-27 20:00", "2022-07-28 01:00"], tz="UTC")
+    # EURUSD carry = EUR - USD; the 27 July hike only counts from 28 July.
+    assert rates.carry(r, "EURUSD", t).tolist() == [-1.25, -2.0]
+
+
+def test_channel_breakout_carry_filter_keeps_only_carry_earning_directions(m1):
+    f = build_features(m1, FeatureConfig(bar="4h"))
+    f["carry"] = np.where(f.index.month % 2 == 0, 2.0, -2.0)  # positive carry favours longs
+    sig = SETUPS["channel_breakout"].signals(f, {"channel": 20, "min_carry": 1.0})
+    assert len(sig) and ((sig["direction"] * sig["carry"]) >= 1.0).all()
+    unfiltered = SETUPS["channel_breakout"].signals(f, {"channel": 20})
+    assert len(unfiltered) > len(sig) and "carry" in unfiltered

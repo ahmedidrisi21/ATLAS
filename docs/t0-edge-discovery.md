@@ -16,7 +16,7 @@ research more (§26); the engine is not built around a strategy without edge.
 | Bid/ask M1 trade simulator with stressed spread, commission, slippage, swap | Built |
 | Walk-forward, validation pass, §15 gates, §22 robustness checks | Built |
 | Experiment registry with monthly budget and trial counting for the deflated Sharpe | Built |
-| Run on real 2019–mid-2025 data | **Done 2026-09-23: all three setups fail (see Results)** |
+| Run on real 2019–mid-2025 data | **Done 2026-09-23: all three setups fail (see Results)**; rounds 2–4 also fail |
 
 ## Results (2026-09-23, real Dukascopy data)
 
@@ -81,6 +81,75 @@ Approved by the operator and declared (commit c6821c1) before any run.
   before costs, on both dev (−0.057 R) and validation (−0.029 R).
 
 **T0 exit gate still not met after eight strategies (five setups, three timeframes).**
+
+### Round 4: fix reversal on seven dollar pairs (2026-09-28)
+
+Chosen by the operator from a literature search and declared (commit 5c2659c)
+before any run. Setup `fix_reversal` fades the last hour's move into the
+Tokyo, ECB or London fix (Krohn, Mueller and Whelan, JF 2024) and exits at the
+end of the paper's next window. Grid: fix × min_move_atr (6 points). Pairs:
+EURUSD, GBPUSD, USDJPY, AUDUSD, NZDUSD, USDCAD, USDCHF (all 16.9M M1 bars
+clean: no crossed quotes or OHLC errors).
+
+| Strategy | OOS trades | After costs | After spread, before fees | Spread-free (mid) | Random-entry mean / p95 | Gates failed |
+| --- | --- | --- | --- | --- | --- | --- |
+| fix_reversal | 5,089 | −0.090 R | −0.055 R | +0.003 R | −0.255 / −0.235 R | 11 of 14 |
+
+- **No edge at the mid price.** Faded at the fix, the next window's move is
+  +0.003 R on average: the stressed spread (≈0.06 R) and fees (≈0.04 R) turn
+  that into −0.09 R. Every year and every pair is negative after costs;
+  EURUSD is the least bad (−0.033 R). The paper already warned that the
+  pattern is a few basis points a day and loses at full spreads.
+- Validation picked the ECB fix with min_move_atr 0.5 (−0.071 R, PF 0.85).
+- It beats random entries by a wide margin only because random entries at
+  the same holding times land in wide-spread hours; that is not an edge.
+
+**T0 exit gate still not met after nine strategies (six setups).**
+
+### Round 5: swing trend following (2026-09-29)
+
+Chosen by the operator ("hold trades for days so costs matter less") and
+declared (commit e6abb97) before any run. `channel_breakout_d1` enters on an
+H4 close beyond the 20- or 40-trading-day high or low on the seven dollar
+pairs. For this strategy only, exits are swing exits: no profit target, no
+Friday flatten, and a stop that trails the best price at the initial risk
+distance. Grid: channel (120, 240 H4 bars) × sl_atr (4, 6 H4 ATRs).
+
+| Strategy | OOS trades | After costs | After spread, before fees | Spread-free (mid) | Fees and swap | Random-entry mean / p95 | Gates failed |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| channel_breakout_d1 | 398 | −0.019 R | +0.034 R | +0.042 R | 0.053 R | −0.069 / +0.016 R | 12 of 14 |
+
+- **First strategy positive before costs**, but only +0.04 R at the mid, and
+  swap on ~15 nights per trade (median hold 9 days) takes it negative.
+  Swap is charged to both sides at 0.5–0.6 pip a night, so this is
+  conservative for trades that earn carry.
+- Dev walk-forward is flat (+0.001 R, PF 1.00); validation is −0.088 R.
+  Profit comes from two dollar-trend years (2020 +0.14 R, 2022 +0.12 R) and
+  from USDJPY (+0.25 R); the other years lose.
+- It beats the random-entry mean by 0.05 R but not its p95.
+
+**T0 exit gate still not met after ten strategies (six setups).**
+
+### Round 6: swing trend following with carry (2026-09-29)
+
+Chosen by the operator and declared (commit 6269625) before any run.
+`carry_trend_d1` is round 5's breakout and swing exits, taking only
+directions that earn at least 0.5%/yr of policy-rate carry. Swap is charged
+from real rate differentials (BIS daily central bank policy rates, as of the
+previous day) less a 1%/yr markup, instead of a flat fee.
+
+| Strategy | OOS trades | After costs | Spread-free (mid) | Swap and fees | Random-entry mean / p95 | Gates failed |
+| --- | --- | --- | --- | --- | --- | --- |
+| carry_trend_d1 | 104 | −0.017 R | −0.035 R | −0.027 R (earned) | −0.031 / +0.216 R | 13 of 14 |
+
+- **Carry is now earned** (swap and fees are a net +0.027 R per trade), but
+  the price moves themselves lose (−0.035 R at the mid).
+- **Too few trades to judge.** Rate gaps were near zero in 2020–2021, so
+  eight of sixteen walk-forward folds had no qualifying training trades and
+  were skipped; only 104 OOS trades (gate: 300). Dev −0.053 R, validation
+  +0.017 R (PF 1.05).
+
+**T0 exit gate still not met after eleven strategies (six setups).**
 
 ## Running it
 

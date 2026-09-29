@@ -3,6 +3,10 @@
 The classic trend-following entry (Donchian channel). Meant for H4 decision
 bars, where multi-day trends are the effect and costs are small next to the
 stop. The stop is a fixed ATR multiple from the decision close.
+
+With ``min_carry`` set (and a ``carry`` feature: base minus quote policy rate,
+% a year), only breakouts whose direction earns at least that much carry are
+taken, so trend and carry agree.
 """
 
 from __future__ import annotations
@@ -14,6 +18,7 @@ from .base import Setup, emit
 DEFAULTS = {
     "channel": 20,
     "sl_atr": 1.5,
+    "min_carry": None,
 }
 
 
@@ -25,8 +30,13 @@ def detect(f: pd.DataFrame, p: dict) -> pd.DataFrame:
         beyond = d * (f["close"] - edge) > 0
         fresh = beyond & ~beyond.shift(1, fill_value=False)
         stop = f["close"] - d * p["sl_atr"] * f["atr"]
-        out.append(emit(f, fresh, d, stop))
+        if p["min_carry"] is not None:
+            fresh &= d * f["carry"] >= p["min_carry"]
+        sig = emit(f, fresh, d, stop)
+        if "carry" in f:
+            sig["carry"] = f.loc[fresh.fillna(False).astype(bool) & stop.notna(), "carry"].to_numpy()
+        out.append(sig)
     return pd.concat(out, ignore_index=True)
 
 
-SETUP = Setup("channel_breakout", "0.1.0", detect, DEFAULTS)
+SETUP = Setup("channel_breakout", "0.2.0", detect, DEFAULTS)

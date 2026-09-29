@@ -134,3 +134,52 @@ def test_signals_without_exit_by_are_unchanged():
     m1 = path([(1.1000, 1.1005, 1.0998, 1.1004), (1.1004, 1.1023, 1.1003, 1.1020)])
     t = simulate(signal(1, 1.0991), m1, NO_COSTS).iloc[0]
     assert t["exit_reason"] == "target" and pd.isna(t["exit_by"])
+
+
+TREND = ExitPolicy(rr=None, friday_flatten_utc=None, trail=True)
+
+
+def test_trailing_stop_follows_earlier_highs_and_locks_in_profit():
+    # Long: entry ask 1.1001, stop 1.0991, risk 0.0010. The bid runs to 1.1049,
+    # so the trail sits at 1.1039; the next bar's bid low 1.1034 takes it out there.
+    m1 = path([(1.1000, 1.1002, 1.0999, 1.1000), (1.1000, 1.1050, 1.1000, 1.1045), (1.1045, 1.1046, 1.1035, 1.1040)])
+    t = simulate(signal(1, 1.0991), m1, NO_COSTS, TREND).iloc[0]
+    assert t["exit_reason"] == "trail_stop"
+    assert t["exit"] == pytest.approx(1.1039)
+    assert t["r"] == pytest.approx(3.8)
+
+
+def test_trailing_stop_never_uses_the_current_bars_high():
+    # One bar makes a new high and falls back inside it; the trail is still at the initial stop.
+    m1 = path([(1.1000, 1.1002, 1.0999, 1.1000), (1.1000, 1.1050, 1.0995, 1.1000)])
+    t = simulate(signal(1, 1.0991), m1, NO_COSTS, TREND).iloc[0]
+    assert t["exit_reason"] == "end_of_data"
+
+
+def test_short_trailing_stop_and_no_target():
+    # Short: entry bid 1.0999, stop 1.1009, risk 0.0010. The ask falls to 1.0951; trail at 1.0961.
+    m1 = path([(1.1000, 1.1001, 1.0998, 1.1000), (1.1000, 1.1000, 1.0950, 1.0955), (1.0955, 1.0965, 1.0952, 1.0960)])
+    t = simulate(signal(-1, 1.1009), m1, NO_COSTS, TREND).iloc[0]
+    assert t["exit_reason"] == "trail_stop"
+    assert t["exit"] == pytest.approx(1.0961)
+    assert t["r"] == pytest.approx(3.8)
+
+
+def test_carry_swap_is_earned_by_the_high_yielder_and_charged_to_the_other_side():
+    c = CostModel(swap_markup_pct=0.5)
+    # 4% carry at price 1.0: a long earns (4 - 0.5)% / 365 a night, a short pays (4 + 0.5)% / 365.
+    assert c.swap_per_night(1, 4.0, 1.0) == pytest.approx(-0.035 / 365)
+    assert c.swap_per_night(-1, 4.0, 1.0) == pytest.approx(0.045 / 365)
+    assert c.swap_per_night(1, float("nan"), 1.0) == c.swap_per_rollover
+    assert CostModel().swap_per_night(1, 4.0, 1.0) == CostModel().swap_per_rollover
+
+
+def test_carry_swap_flows_into_trade_cost():
+    # Held from Tuesday into Thursday: Tuesday night plus Wednesday's triple rollover, at 3% carry, no markup.
+    idx = pd.date_range(T0, periods=3 * 24 * 60, freq="1min", name="time")
+    m1 = path([(1.1000, 1.1001, 1.0999, 1.1000)] * len(idx))
+    costs = CostModel(spread_mult=1.0, commission_rt=0, entry_slippage=0, stop_slippage=0, swap_markup_pct=0.0)
+    sig = signal(1, 1.0901).assign(carry=3.0, exit_by=T0 + pd.Timedelta(days=2))
+    t = simulate(sig, m1, costs, ExitPolicy(friday_flatten_utc=None)).iloc[0]
+    assert t["rollovers"] == 4
+    assert t["cost_r"] == pytest.approx(-4 * 0.03 * t["entry"] / 365 / t["risk"])

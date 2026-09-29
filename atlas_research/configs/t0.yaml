@@ -6,6 +6,7 @@ data:
   source: dukascopy
   root: data
   raw_cache: data/raw/dukascopy
+  rates: data/rates/cbpol_d.csv   # BIS central bank policy rates, for carry
 
 segments:
   dev: ["2019-01-01", "2024-01-01"]
@@ -25,6 +26,12 @@ costs:
   per_symbol:
     EURUSD: {commission_rt: 0.00007, entry_slippage: 0.00001, stop_slippage: 0.00002, swap_per_rollover: 0.00005}
     GBPUSD: {commission_rt: 0.00007, entry_slippage: 0.00001, stop_slippage: 0.00002, swap_per_rollover: 0.00006}
+    # Round 4 pairs. $7/lot round turn converted to quote units at a typical price; slippage 0.1/0.2 pip.
+    USDJPY: {commission_rt: 0.0100, entry_slippage: 0.001, stop_slippage: 0.002, swap_per_rollover: 0.006}
+    AUDUSD: {commission_rt: 0.00007, entry_slippage: 0.00001, stop_slippage: 0.00002, swap_per_rollover: 0.00005}
+    NZDUSD: {commission_rt: 0.00007, entry_slippage: 0.00001, stop_slippage: 0.00002, swap_per_rollover: 0.00005}
+    USDCAD: {commission_rt: 0.000095, entry_slippage: 0.00001, stop_slippage: 0.00002, swap_per_rollover: 0.00006}
+    USDCHF: {commission_rt: 0.000065, entry_slippage: 0.00001, stop_slippage: 0.00002, swap_per_rollover: 0.00005}
 
 exits:          # T0 baseline; exit research is T1
   rr: 2.0
@@ -126,3 +133,36 @@ strategies:
     grid:
       entry_hour: [12, 13]
       exit_hour: [16, 20]
+  fix_reversal:
+    hypothesis: "The last hour's move into a daily FX fix reverses over the next window (Krohn, Mueller and Whelan 2024), far enough to pay after costs when faded at the fix with a 1.5 H1-ATR stop."
+    symbols: [EURUSD, GBPUSD, USDJPY, AUDUSD, NZDUSD, USDCAD, USDCHF]
+    grid:
+      fix: [tokyo, ecb, london]
+      min_move_atr: [0.0, 0.5]
+  channel_breakout_d1:
+    setup: channel_breakout
+    bar: 4h
+    hypothesis: "A close beyond the 20- or 40-trading-day high or low starts a multi-week trend (time-series momentum). Held over weekends with no profit cap and a stop trailing at the initial risk, the winners pay for the many small losses after costs."
+    symbols: [EURUSD, GBPUSD, USDJPY, AUDUSD, NZDUSD, USDCAD, USDCHF]
+    exits:            # swing exits for this strategy only; the T0 baseline stays 2R + Friday flatten
+      rr: null
+      friday_flatten_utc: null
+      trail: true
+    grid:
+      channel: [120, 240]   # H4 bars: 20 and 40 trading days
+      sl_atr: [4.0, 6.0]    # H4 ATRs, about 1.6 and 2.4 daily ATRs
+  carry_trend_d1:
+    setup: channel_breakout
+    bar: 4h
+    hypothesis: "Round 5's swing breakout, taken only when its direction earns at least 0.5% a year of policy-rate carry, pays after costs: trend and carry agree, and swap is earned rather than paid."
+    symbols: [EURUSD, GBPUSD, USDJPY, AUDUSD, NZDUSD, USDCAD, USDCHF]
+    exits:            # same swing exits as channel_breakout_d1
+      rr: null
+      friday_flatten_utc: null
+      trail: true
+    carry:
+      swap_markup_pct: 1.0   # swap = carry earned or paid less a 1%/yr broker markup, both sides (BIS policy rates)
+    grid:
+      channel: [120, 240]   # H4 bars: 20 and 40 trading days
+      sl_atr: [4.0, 6.0]    # H4 ATRs
+      min_carry: [0.5]      # % a year in the trade's favour

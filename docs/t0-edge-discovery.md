@@ -106,6 +106,30 @@ clean: no crossed quotes or OHLC errors).
 
 **T0 exit gate still not met after nine strategies (six setups).**
 
+### Round 5: swing trend following (2026-09-29)
+
+Chosen by the operator ("hold trades for days so costs matter less") and
+declared (commit e6abb97) before any run. `channel_breakout_d1` enters on an
+H4 close beyond the 20- or 40-trading-day high or low on the seven dollar
+pairs. For this strategy only, exits are swing exits: no profit target, no
+Friday flatten, and a stop that trails the best price at the initial risk
+distance. Grid: channel (120, 240 H4 bars) × sl_atr (4, 6 H4 ATRs).
+
+| Strategy | OOS trades | After costs | After spread, before fees | Spread-free (mid) | Fees and swap | Random-entry mean / p95 | Gates failed |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| channel_breakout_d1 | 398 | −0.019 R | +0.034 R | +0.042 R | 0.053 R | −0.069 / +0.016 R | 12 of 14 |
+
+- **First strategy positive before costs**, but only +0.04 R at the mid, and
+  swap on ~15 nights per trade (median hold 9 days) takes it negative.
+  Swap is charged to both sides at 0.5–0.6 pip a night, so this is
+  conservative for trades that earn carry.
+- Dev walk-forward is flat (+0.001 R, PF 1.00); validation is −0.088 R.
+  Profit comes from two dollar-trend years (2020 +0.14 R, 2022 +0.12 R) and
+  from USDJPY (+0.25 R); the other years lose.
+- It beats the random-entry mean by 0.05 R but not its p95.
+
+**T0 exit gate still not met after ten strategies (six setups).**
+
 ## Running it
 
 ```bash

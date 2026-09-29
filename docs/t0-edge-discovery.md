@@ -130,6 +130,27 @@ distance. Grid: channel (120, 240 H4 bars) × sl_atr (4, 6 H4 ATRs).
 
 **T0 exit gate still not met after ten strategies (six setups).**
 
+### Round 6: swing trend following with carry (2026-09-29)
+
+Chosen by the operator and declared (commit 6269625) before any run.
+`carry_trend_d1` is round 5's breakout and swing exits, taking only
+directions that earn at least 0.5%/yr of policy-rate carry. Swap is charged
+from real rate differentials (BIS daily central bank policy rates, as of the
+previous day) less a 1%/yr markup, instead of a flat fee.
+
+| Strategy | OOS trades | After costs | Spread-free (mid) | Swap and fees | Random-entry mean / p95 | Gates failed |
+| --- | --- | --- | --- | --- | --- | --- |
+| carry_trend_d1 | 104 | −0.017 R | −0.035 R | −0.027 R (earned) | −0.031 / +0.216 R | 13 of 14 |
+
+- **Carry is now earned** (swap and fees are a net +0.027 R per trade), but
+  the price moves themselves lose (−0.035 R at the mid).
+- **Too few trades to judge.** Rate gaps were near zero in 2020–2021, so
+  eight of sixteen walk-forward folds had no qualifying training trades and
+  were skipped; only 104 OOS trades (gate: 300). Dev −0.053 R, validation
+  +0.017 R (PF 1.05).
+
+**T0 exit gate still not met after eleven strategies (six setups).**
+
 ## Running it
 
 ```bash

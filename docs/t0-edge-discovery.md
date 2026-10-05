@@ -82,6 +82,24 @@ Approved by the operator and declared (commit c6821c1) before any run.
 
 **T0 exit gate still not met after eight strategies (five setups, three timeframes).**
 
+### Round 4: channel breakout with trend exits (2026-10-05)
+
+Approved by the operator and declared (commit 050c6d8) before the run: round 3's
+entries and grid, with the §18 trend exit at its default (no target, no Friday
+flatten, 2 × ATR(H4) trail after +1.5 R).
+
+| Strategy | OOS trades | After costs | Before costs | Costs | Random-entry mean / p95 | Gates failed |
+| --- | --- | --- | --- | --- | --- | --- |
+| channel_breakout_h4_trend | 388 | −0.107 R | −0.059 R | 0.048 R | −0.084 / +0.042 R | 12 of 14 |
+
+The trail let winners run (largest +11.2 R; 138 trades closed on the trail),
+but the median trade is a full −1 R loss and only 2022 and H1 2025 were
+positive. Dev −0.115 R, validation −0.076 R. Removing the exit confound did
+not reveal an edge.
+
+**After four rounds and nine strategies, no setup passes T0 on EURUSD/GBPUSD
+2019–mid-2025.**
+
 ## Running it
 
 ```bash

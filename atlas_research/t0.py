@@ -29,7 +29,7 @@ from atlas_engine.features.frame import FeatureConfig, build_features
 from atlas_engine.setups import SETUPS, EdgeFilters, Setup
 
 from . import metrics
-from .backtest import TRADE_COLS, CostModel, ExitPolicy, M1Path, simulate
+from .backtest import TRADE_COLS, CostModel, ExitPolicy, M1Path, TrailFrame, simulate
 from .registry import Registry
 
 Window = tuple[pd.Timestamp, pd.Timestamp]
@@ -42,6 +42,7 @@ class Market:
     features: pd.DataFrame
     costs: CostModel
     paths: dict[float, M1Path]
+    trail: TrailFrame | None = None
 
 
 def _ts(x) -> pd.Timestamp:
@@ -84,7 +85,7 @@ class Runner:
             parts = []
             for m in self.markets:
                 sig = self.setup.signals(m.features, params, self.filters)
-                parts.append(simulate(sig, m.m1, m.costs.with_spread(spread_mult), self.exits, m.symbol, self._path(m, spread_mult)))
+                parts.append(simulate(sig, m.m1, m.costs.with_spread(spread_mult), self.exits, m.symbol, self._path(m, spread_mult), self._trail(m)))
             self._cache[key] = _concat(parts)
         return self._cache[key]
 
@@ -93,8 +94,15 @@ class Runner:
         for m in self.markets:
             sig = signals_by_symbol.get(m.symbol)
             if sig is not None and len(sig):
-                parts.append(simulate(sig, m.m1, m.costs.with_spread(spread_mult), self.exits, m.symbol, self._path(m, spread_mult)))
+                parts.append(simulate(sig, m.m1, m.costs.with_spread(spread_mult), self.exits, m.symbol, self._path(m, spread_mult), self._trail(m)))
         return _concat(parts)
+
+    def _trail(self, m: Market) -> TrailFrame | None:
+        if not self.exits.atr_trail_mult:
+            return None
+        if m.trail is None:
+            m.trail = TrailFrame.from_features(m.features)
+        return m.trail
 
     @staticmethod
     def _path(m: Market, spread_mult: float) -> M1Path:
@@ -214,7 +222,10 @@ def run_t0(
     val: Window = tuple(_ts(x) for x in cfg["segments"]["validation"])
 
     markets = [prepare_market(s, load_m1(s, dev[0], val[1]), cfg, bar) for s in scfg["symbols"]]
-    exits = ExitPolicy(rr=cfg["exits"]["rr"], friday_flatten_utc=cfg["exits"]["friday_flatten_utc"])
+    # A strategy may override the T0 baseline exits (e.g. trend exits for trend following).
+    ex = {**cfg["exits"], **scfg.get("exits", {})}
+    exits = ExitPolicy(rr=ex["rr"], friday_flatten_utc=ex["friday_flatten_utc"],
+                       atr_trail_mult=ex.get("atr_trail_mult"), atr_trail_after_r=ex.get("atr_trail_after_r", 1.5))
     filters = EdgeFilters(**cfg["filters"])
     runner = Runner(setup, markets, exits, filters)
     base_mult = cfg["costs"]["spread_mult"]
@@ -300,6 +311,7 @@ def run_t0(
         "strategy": strategy,
         "setup": setup_name,
         "bar": bar,
+        "exits": ex,
         "strategy_version": setup.version,
         "created_at": now.isoformat(),
         "hypothesis": scfg.get("hypothesis", ""),
@@ -331,7 +343,7 @@ def run_t0(
         },
     }
     registry.append({k: result[k] for k in (
-        "experiment_id", "strategy", "setup", "bar", "strategy_version", "created_at", "hypothesis", "symbols", "data_window",
+        "experiment_id", "strategy", "setup", "bar", "exits", "strategy_version", "created_at", "hypothesis", "symbols", "data_window",
         "grid", "trial_sharpes", "final_params", "passed", "kanban_metadata")} | {"failed_gates": [x["gate"] + " / " + x["scope"] for x in gates if not x["passed"]]})
 
     if out_dir is not None:

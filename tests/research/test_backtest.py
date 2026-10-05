@@ -134,3 +134,54 @@ def test_signals_without_exit_by_are_unchanged():
     m1 = path([(1.1000, 1.1005, 1.0998, 1.1004), (1.1004, 1.1023, 1.1003, 1.1020)])
     t = simulate(signal(1, 1.0991), m1, NO_COSTS).iloc[0]
     assert t["exit_reason"] == "target" and pd.isna(t["exit_by"])
+
+
+def _trail_frame(m1: pd.DataFrame, every: int, atr: float):
+    from atlas_research.backtest import TrailFrame
+
+    closes = m1.index[::every][1:]
+    return TrailFrame(closes.as_unit("ns").asi8, np.full(len(closes), atr))
+
+
+def test_atr_trail_moves_the_stop_at_bar_closes_and_exits_on_it():
+    # Long from ask 1.1001, stop 1.0991 (risk 0.0010). Price runs to 1.1030 (bid 1.1029, +2.8R),
+    # so at the next close the stop trails to 1.1029 - 2 x 0.0005 = 1.1019; then price falls through it.
+    mids = [(1.1000, 1.1002, 1.0999, 1.1001), (1.1001, 1.1030, 1.1000, 1.1028), (1.1028, 1.1029, 1.1025, 1.1026),
+            (1.1026, 1.1027, 1.1010, 1.1012), (1.1012, 1.1013, 1.1011, 1.1012)]
+    m1 = path(mids)
+    exits = ExitPolicy(rr=None, friday_flatten_utc=None, atr_trail_mult=2.0, atr_trail_after_r=1.5)
+    t = simulate(signal(1, 1.0991), m1, NO_COSTS, exits, trail=_trail_frame(m1, 2, 0.0005)).iloc[0]
+    assert t["exit_reason"] == "trail_stop"
+    assert t["exit"] == pytest.approx(1.1019)
+    assert t["exit_time"] == T0 + pd.Timedelta(minutes=3)
+    assert pd.isna(t["target"])
+
+
+def test_trail_never_loosens_and_waits_for_the_profit_threshold():
+    # Only +1R in profit: no trail, the original stop takes the trade out.
+    mids = [(1.1000, 1.1002, 1.0999, 1.1001), (1.1001, 1.1011, 1.1000, 1.1010), (1.1010, 1.1010, 1.0985, 1.0990)]
+    m1 = path(mids)
+    exits = ExitPolicy(rr=None, friday_flatten_utc=None, atr_trail_mult=2.0, atr_trail_after_r=1.5)
+    t = simulate(signal(1, 1.0991), m1, NO_COSTS, exits, trail=_trail_frame(m1, 2, 0.0005)).iloc[0]
+    assert t["exit_reason"] == "stop"
+    assert t["r"] == pytest.approx(-1.0)
+
+
+def test_trail_matches_fixed_scan_when_it_never_moves():
+    m1 = path([(1.1000, 1.1005, 1.0998, 1.1004), (1.1004, 1.1023, 1.1003, 1.1020)])
+    trail = _trail_frame(m1, 1, 1.0)  # huge ATR: trailed stop would sit far below the original
+    fixed = simulate(signal(1, 1.0991), m1, NO_COSTS).iloc[0]
+    trailed = simulate(signal(1, 1.0991), m1, NO_COSTS, ExitPolicy(atr_trail_mult=2.0, atr_trail_after_r=0.0), trail=trail).iloc[0]
+    assert (trailed["exit_reason"], trailed["r"]) == (fixed["exit_reason"], fixed["r"])
+
+
+def test_atr_trail_works_for_shorts():
+    # Mirror of the long case: short from bid 1.0999, stop 1.1009; ask low 1.0971 -> stop trails to 1.0981.
+    mids = [(1.1000, 1.1001, 1.0998, 1.0999), (1.0999, 1.1000, 1.0970, 1.0972), (1.0972, 1.0975, 1.0971, 1.0974),
+            (1.0974, 1.0990, 1.0973, 1.0988), (1.0988, 1.0989, 1.0987, 1.0988)]
+    m1 = path(mids)
+    exits = ExitPolicy(rr=None, friday_flatten_utc=None, atr_trail_mult=2.0, atr_trail_after_r=1.5)
+    t = simulate(signal(-1, 1.1009), m1, NO_COSTS, exits, trail=_trail_frame(m1, 2, 0.0005)).iloc[0]
+    assert t["exit_reason"] == "trail_stop"
+    assert t["exit"] == pytest.approx(1.0981)
+    assert t["r"] == pytest.approx(1.8)

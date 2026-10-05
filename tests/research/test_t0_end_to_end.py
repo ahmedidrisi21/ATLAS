@@ -64,3 +64,12 @@ def test_h1_variant_runs_and_shares_the_setups_trials(cfg, tmp_path):
     assert res["dsr"]["n_trials"] == 8
     entry = reg.entries("session_breakout_h1")[0]
     assert entry["setup"] == "session_breakout" and entry["bar"] == "1h"
+
+
+def test_strategy_exit_overrides_reach_the_backtest(cfg, tmp_path):
+    cfg["strategies"]["channel_breakout_h4_trend"]["symbols"] = ["EURUSD"]
+    m1 = synthetic.random_walk_m1("EURUSD", "2019-01-01", "2023-01-01", seed=5)
+    load = lambda sym, a, b: m1.loc[(m1.index >= a) & (m1.index < b)]  # noqa: E731
+    res = run_t0("channel_breakout_h4_trend", cfg, load, Registry(tmp_path / "exp.jsonl"))
+    assert not res["passed"]
+    assert res["exits"]["rr"] is None and res["exits"]["atr_trail_mult"] == 2.0

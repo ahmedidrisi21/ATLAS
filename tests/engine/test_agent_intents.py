@@ -19,7 +19,7 @@ from t4help import REPO_CONFIG, Clock, build
 THESIS = "EURUSD held the London low twice and the dollar is soft after weak US data; buying the retest."
 
 
-def intent(r, intent_id="i-0001", direction="buy", stop_pips=15, rr=2.0, symbol="EURUSD", confidence=0.4):
+def intent(r, intent_id="i-0001", direction="buy", stop_pips=15, rr=2.0, symbol="EURUSD", confidence=0.5):
     t = r.adapter.tick(symbol)
     d = 1 if direction == "buy" else -1
     entry = t.ask if d == 1 else t.bid

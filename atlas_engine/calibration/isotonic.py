@@ -87,6 +87,13 @@ class Calibrator:
         return cls(**json.loads(s))
 
 
+def calibration_version(cal: Calibrator) -> str:
+    """A content hash of a fitted calibrator (PRD v3 §24): the same fit always has the same version."""
+    import hashlib
+
+    return "iso-" + hashlib.sha256(cal.to_json().encode()).hexdigest()[:12]
+
+
 def brier(p, y) -> float:
     p, y = np.asarray(p, float), np.asarray(y, float)
     ok = np.isfinite(p) & np.isfinite(y)

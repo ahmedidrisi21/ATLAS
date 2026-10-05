@@ -64,7 +64,9 @@ def build_engine(args):
     from atlas_engine.journal import Journal
     from atlas_engine.operator import load_key
     from atlas_engine.runtime import TradingEngine
-    from atlas_engine.strategies import load_strategies
+    from atlas_engine.models import ModelRegistry
+    from atlas_engine.pipeline import load_decision_settings
+    from atlas_engine.strategies import decision_config, load_strategies
 
     cfg = load_engine_config(args.config, require_read_only=not args.allow_writable_config)
     settings = load_execution_settings(args.config)
@@ -92,9 +94,16 @@ def build_engine(args):
 
         def watchdog():  # the fake terminal has no EA; stand in for its heartbeat in drills
             return f"ATLAS-WD 1 {int(time.time())} 0 OK"
-    return TradingEngine(cfg, settings, adapter, journal, state, sources=load_strategies(args.config),
+    sources = load_strategies(args.config)
+    decision = load_decision_settings(args.config)
+    priors, assignment = decision_config(sources)
+    # GBM and Jev load here once one has been trained and kept by T2 (PRD v3 §23). Until then a strategy that
+    # names them gets no estimate, so its trades are rejected rather than run on rules by default.
+    models = ModelRegistry.default(priors, assignment, timeout_ms=decision.model_timeout_ms)
+    return TradingEngine(cfg, settings, adapter, journal, state, sources=sources,
                          alerts=AlertOutbox(state / "alerts.jsonl"), operator_key=key,
-                         watchdog=watchdog, broker_label=label, agent=load_agent_settings(args.config))
+                         watchdog=watchdog, broker_label=label, agent=load_agent_settings(args.config),
+                         decision=decision, models=models)
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -131,6 +140,11 @@ def main(argv: list[str] | None = None) -> None:
     s = sub.add_parser("show", help="print the engine's saved state (stopped or running)")
     s.add_argument("--state", required=True)
 
+    a = sub.add_parser("audit", help="reconstruct one decision and its trade from the journal (PRD v3 §31)")
+    a.add_argument("--state", required=True)
+    a.add_argument("decision_id", nargs="?", help="omit to list the latest decisions")
+    a.add_argument("--full", action="store_true", help="every journal row, not just the summary")
+
     c = sub.add_parser("scorecard", help="closed trades in R after costs by setup, and Hermes's verdict")
     c.add_argument("--state", required=True)
 
@@ -158,6 +172,16 @@ def main(argv: list[str] | None = None) -> None:
         st = Journal(Path(args.state) / "journal.db", "show").load_state("engine") or {}
         print(json.dumps({k: st.get(k) for k in ("trading", "kill", "last_state", "last_reasons", "risk", "book",
                                                  "requests")}, indent=2, default=str))
+    elif args.cmd == "audit":
+        from atlas_engine.journal import Journal
+        from atlas_engine.journal.audit import reconstruct
+        j = Journal(Path(args.state) / "journal.db", "audit")
+        if not args.decision_id:
+            for r in j.rows("decisions", 20):
+                print(f"{r['at']}  {r.get('decision', '-'):6}  {r.get('outcome', ''):12}  {r['decision_id']}")
+            return
+        rec = reconstruct(j, args.decision_id)
+        print(json.dumps(rec if args.full else rec["summary"], indent=2, default=str))
     elif args.cmd == "scorecard":
         from atlas_engine.agent_intents import scorecard
         from atlas_engine.journal import Journal

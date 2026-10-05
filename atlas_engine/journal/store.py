@@ -17,9 +17,11 @@ import sqlite3
 import threading
 from pathlib import Path
 
-# PRD §24 tables (market_states and calibration_models come with T2's decision layer).
+# PRD §24 tables, plus what PRD v3 §31 asks to reconstruct a trade: the market state at the decision and
+# every model evaluation (with its model, calibration, feature-schema and strategy versions).
 TABLES = ("decisions", "risk_checks", "orders", "fills", "positions", "trades", "strategy_versions",
-          "system_events", "latency_metrics", "experiments", "trade_intents", "agent_actions", "operator_commands")
+          "system_events", "latency_metrics", "experiments", "trade_intents", "agent_actions", "operator_commands",
+          "market_states", "model_evaluations", "calibration_models")
 IDS = ("run_id", "state_id", "decision_id", "trade_id", "experiment_id", "kanban_task_id")
 
 

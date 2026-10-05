@@ -16,6 +16,7 @@ from atlas_engine.alerts import AlertOutbox
 from atlas_engine.config import load_engine_config
 from atlas_engine.execution import ExecutionSettings
 from atlas_engine.journal import Journal
+from atlas_engine.models import ModelRegistry
 from atlas_engine.operator import sign
 from atlas_engine.runtime import TradingEngine
 from atlas_engine.strategies import Signal
@@ -25,6 +26,15 @@ UTC = dt.timezone.utc
 # Tuesday 2026-09-22 10:00 UTC: London session, mid server day in Prague.
 T0 = dt.datetime(2026, 9, 22, 10, 0, tzinfo=UTC)
 KEY = bytes(range(32))
+# No setup has passed T0, so no real prior exists. The tests give every setup a stand-in prior that clears the
+# EV gate at 2R (0.45 x 2 - 0.55 - commission is about +0.30R), so the engine's other stages are what they test.
+TEST_PRIOR = 0.45
+
+
+def test_models(**kw) -> ModelRegistry:
+    from atlas_engine.setups import SETUPS
+
+    return ModelRegistry.default(priors={s: TEST_PRIOR for s in SETUPS}, **kw)
 
 
 class Clock:
@@ -100,7 +110,7 @@ class Rig:
 
 def build(root: Path, clock: Clock | None = None, *, mt5: FakeMT5 | None = None, settings: ExecutionSettings | None = None,
           config_root: Path = REPO_CONFIG, start: bool = True, watchdog_line: list | None = None,
-          sources: list | None = None, adapter_clock=None) -> Rig:
+          sources: list | None = None, adapter_clock=None, models: ModelRegistry | None = None) -> Rig:
     clock = clock or Clock()
     cfg = load_engine_config(config_root)
     mt5 = mt5 or FakeMT5(clock, symbols=cfg.symbols)
@@ -109,7 +119,8 @@ def build(root: Path, clock: Clock | None = None, *, mt5: FakeMT5 | None = None,
     line = watchdog_line or [""]
     engine = TradingEngine(cfg, settings or ExecutionSettings(), adapter, journal, root / "state", now=clock,
                            alerts=AlertOutbox(root / "alerts.jsonl", senders=[]), operator_key=KEY,
-                           watchdog=lambda: line[0], broker_label="fake-mt5", sources=sources)
+                           watchdog=lambda: line[0], broker_label="fake-mt5", sources=sources,
+                           models=models or test_models())
     rig = Rig(engine, mt5, adapter, journal, clock, root, line, config_root)
     if start:
         rig.beat()

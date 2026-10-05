@@ -36,13 +36,16 @@ from typing import Callable
 from atlas_engine import agent_intents as AI
 from atlas_engine.adapters.broker import BrokerUnavailable
 from atlas_engine.config import EngineConfig
-from atlas_engine.execution import EntryOrder, ExecutionSettings, Executor, client_order_id
+from atlas_engine.execution import EntryOrder, ExecutionSettings, MT5ExecutionAdapter, client_order_id
+from atlas_engine.intents import TradeIntent, from_signal
 from atlas_engine.market_data.symbols import spec as symbol_spec
+from atlas_engine.models import ModelRegistry
 from atlas_engine.operator import ACTIONS, OperatorAuthError, verify
 from atlas_engine.ops import health as H
+from atlas_engine.pipeline import Context, DecisionPipeline, DecisionSettings
 from atlas_engine.positions.book import ManagedPosition, PositionBook, iso
 from atlas_engine.reconciliation import diff, is_atlas
-from atlas_engine.risk import AccountSnapshot, RiskEngine, RiskState, TradeProposal
+from atlas_engine.risk import AccountSnapshot, RiskEngine, RiskState
 from atlas_engine.strategies import Signal, m1_frame
 
 MAX_EVENTS = 500
@@ -69,7 +72,8 @@ class TradingEngine:
     def __init__(self, cfg: EngineConfig, settings: ExecutionSettings, broker, journal, state_dir: str | Path, *,
                  sources: list | None = None, now: Callable[[], dt.datetime] = utc_now, alerts=None,
                  operator_key: bytes | None = None, watchdog: Callable[[], str | None] | None = None,
-                 broker_label: str = "mt5", agent: AI.AgentIntentSettings | None = None):
+                 broker_label: str = "mt5", agent: AI.AgentIntentSettings | None = None,
+                 decision: DecisionSettings | None = None, models: ModelRegistry | None = None, execution=None):
         self.cfg, self.settings, self.broker, self.journal = cfg, settings, broker, journal
         self.agent = agent or AI.AgentIntentSettings()
         self.state_dir = Path(state_dir)
@@ -81,12 +85,16 @@ class TradingEngine:
         self.operator_key = operator_key
         self.watchdog = watchdog
         self.source = f"engine:{broker_label}"
-        self.executor = Executor(broker, settings)
+        # The only path to the platform (PRD v3 §14, §15). Every order write below goes through it.
+        self.execution = execution or MT5ExecutionAdapter(broker, settings)
+        self.decision_settings = decision or DecisionSettings()
+        self.models = models or ModelRegistry.default(timeout_ms=self.decision_settings.model_timeout_ms)
         self.lock = threading.RLock()
 
         started = now()
         saved = self._load()
         self.risk = RiskEngine(cfg, RiskState.from_dict(saved["risk"]) if saved.get("risk") else None)
+        self.pipeline = DecisionPipeline(self.decision_settings, self.models, self.risk)
         self.book = PositionBook.from_dict(saved.get("book"))
         self.trading = saved.get("trading") or {"enabled": False, "by": "engine", "at": iso(started),
                                                  "reason": "fresh state: the operator must enable trading"}
@@ -302,7 +310,8 @@ class TradingEngine:
             "clock_drift_s": round(self.drift_estimate, 3),
             "db_write_ok": self.db_ok,
             "heartbeat_age_s": {k: None if v is None else round(v, 1) for k, v in hb.items()},
-            "jev_p95_ms": None,
+            "jev_p95_ms": self.models.latency_p95_ms("jev") if "jev" in self.models.assignment.values() else None,
+            "model_failure_frac": round(self.models.worst_failure_frac()[1], 3),
             "daily_loss_frac_of_firm": round(daily, 4),
             "drawdown_frac_of_firm": round(dd, 4),
             "manual_kill": (self.kill or {}).get("reason"),
@@ -363,6 +372,7 @@ class TradingEngine:
                             f"Engine state {self.last_state} -> {h['state']}: {', '.join(h['reasons']) or 'all checks green'}")
             self.last_state, self.last_reasons = h["state"], h["reasons"]
         if h["state"] == H.KILL:
+            self._cancel_orders(now)  # PRD v3 §28: ATLAS sends market orders only, so normally none exist
             if self._atlas_positions():
                 self._flatten(now, "KILL: " + ", ".join(h["reasons"]))
             if self.trading["enabled"]:
@@ -372,82 +382,89 @@ class TradingEngine:
 
     # ================================================================== entries
 
-    def submit(self, sig: Signal) -> dict:
-        """Take one signal through health, the risk engine and execution. Returns the journal record."""
+    def submit(self, sig: Signal | TradeIntent) -> dict:
+        """Take one proposal through the decision pipeline and, on ALLOW, the execution adapter (PRD v3 §11).
+
+        A rule ``Signal`` is turned into a ``TradeIntent`` first, so rules and agents take the same path.
+        Returns the journal record: ``decision`` is ALLOW / REJECT / HALT / KILL and ``outcome`` what happened
+        (skipped, rejected, risk_denied, or the execution result such as filled)."""
         with self.lock:
+            intent = sig if isinstance(sig, TradeIntent) else from_signal(sig)
             now = self.now()
-            did = sig.decision_id
+            did = intent.decision_id
             cid = client_order_id(did)
-            rec = {"decision_id": did, "client_id": cid, "symbol": sig.symbol, "setup": sig.setup,
-                   "version": sig.version, "direction": sig.direction, "stop": sig.stop,
-                   "decision_time": sig.decision_time.isoformat()}
-            reasons = []
-            if not self.trading["enabled"]:
-                reasons.append("trading_disabled")
-            allowed = H.new_trades_allowed(self.health_now, self.trading["enabled"])
-            if sig.symbol not in allowed:
-                reasons.append("symbol_not_traded")
-            elif not allowed[sig.symbol] and self.trading["enabled"]:
-                reasons.append(f"health_{self.health_now['symbols'][sig.symbol]['state'].lower()}")
-            if not self.connected or self.account is None:
-                reasons.append("broker_unavailable")
-            if not self.db_ok:
-                reasons.append("journal_unavailable")
-            if self.book.by_client_id(cid) is not None or cid in self.intents:
-                reasons.append("decision_already_handled")
-            if reasons:
-                return self._decided(rec, "skipped", reasons, now)
-
-            try:
-                tick = self.broker.tick(sig.symbol)
-                rules = self.broker.symbol_rules(sig.symbol)
-            except BrokerUnavailable as e:
-                return self._decided(rec, "skipped", [f"broker_unavailable: {e}"], now)
-            self.rules[sig.symbol] = rules
-            entry = tick.price(sig.direction)
-            proposal = TradeProposal(sig.symbol, sig.setup, sig.direction, entry, sig.stop, sig.ev_scale,
-                                     self._rates(), spec=rules.spec)
-            decision = self.risk.check_entry(proposal, self._snapshot(now))
+            rec = {"decision_id": did, "client_id": cid, "symbol": intent.symbol, "setup": intent.strategy,
+                   "version": intent.strategy_version, "direction": intent.direction, "stop": intent.stop,
+                   "decision_time": intent.decision_time.isoformat(), "source": intent.source}
+            tick = rules = None
+            if self.connected and self.account is not None and intent.symbol in self.cfg.symbols:
+                try:
+                    tick = self.broker.tick(intent.symbol)
+                    rules = self.broker.symbol_rules(intent.symbol)
+                    self.rules[intent.symbol] = rules
+                except BrokerUnavailable as e:
+                    self._event("broker_unavailable", detail=str(e))
+            ctx = Context(now=now, health=self.health_now, trading_enabled=self.trading["enabled"],
+                          connected=self.connected and tick is not None, journal_ok=self.db_ok,
+                          demo_account=self.account.demo if self.account is not None else None, tick=tick, rules=rules,
+                          snapshot=self._snapshot(now) if self.account is not None else None, rates=self._rates(),
+                          account_currency=self.cfg.currency,
+                          already_handled=self.book.by_client_id(cid) is not None or cid in self.intents,
+                          market_open=market_open(now))
+            d = self.pipeline.evaluate(intent, ctx)
             self._drain_risk_events()
-            self._journal("risk_checks", decision.to_dict(), now, decision_id=did)
-            if not decision.allowed:
-                return self._decided(rec, "risk_denied", list(decision.reasons), now)
+            self._journal("market_states", {"symbol": intent.symbol, "bid": getattr(tick, "bid", None),
+                                            "ask": getattr(tick, "ask", None), "health": self.health_now.get("state"),
+                                            "symbol_health": self.health_now.get("symbols", {}).get(intent.symbol),
+                                            "features": intent.features}, now, decision_id=did)
+            if d.model is not None:
+                self._journal("model_evaluations", {**d.model, "strategy": intent.strategy,
+                                                    "strategy_version": intent.strategy_version,
+                                                    "intent_source": intent.source}, now, decision_id=did)
+            if d.risk is not None:
+                self._journal("risk_checks", d.risk, now, decision_id=did)
+            rec = {**rec, "decision": d.decision, "pipeline": d.to_dict()}
+            if not d.allowed:
+                return self._decided(rec, d.outcome, d.reasons, now)
 
-            risk_dist = abs(entry - sig.stop)
-            target = rules.round_price(entry + sig.direction * sig.rr * risk_dist)
-            order = EntryOrder(did, sig.symbol, sig.setup, sig.direction, decision.volume, rules.round_price(sig.stop),
-                               target, self.settings.magic_base + sig.magic_offset, entry)
+            order = EntryOrder(did, intent.symbol, intent.strategy, intent.direction, d.volume,
+                               rules.round_price(intent.stop), d.target, self.settings.magic_base + intent.magic_offset,
+                               d.entry)
             # Recorded before sending, so a fill lost to a crash or timeout is adopted, not closed as an orphan.
-            self.intents[cid] = {**rec, "volume": decision.volume, "target": target, "magic": order.magic,
-                                 "risk_amount": decision.risk_amount, "at": iso(now), "status": "sending"}
-            self._journal("trade_intents", self.intents[cid], now, decision_id=did)
+            self.intents[cid] = {**{k: v for k, v in rec.items() if k != "pipeline"}, "volume": d.volume,
+                                 "target": d.target, "magic": order.magic, "risk_amount": d.risk_amount,
+                                 "at": iso(now), "status": "sending"}
+            self._journal("trade_intents", {**self.intents[cid], "intent": intent.to_dict()}, now, decision_id=did)
             self._persist()
             if not self.db_ok:  # never send an order the journal can't record
                 self.intents[cid]["status"] = "not_sent"
                 return self._decided(rec, "skipped", ["journal_unavailable"], now)
             try:
-                res = self.executor.open(order, now)
+                res = self.execution.submit_order(order, now)
             except BrokerUnavailable as e:
                 # Outcome unknown: the intent stays journaled, so reconciliation adopts a fill if one happened.
                 self.intents[cid]["status"] = "unknown"
-                self._event("order_outcome_unknown", symbol=sig.symbol, setup=sig.setup, detail=str(e))
+                self._event("order_outcome_unknown", symbol=intent.symbol, setup=intent.strategy, detail=str(e))
                 self._persist()
+                rec["pipeline"]["stages"].append({"stage": "execution", "ok": False, "reasons": [f"broker_unavailable: {e}"]})
                 return self._decided(rec, "unknown", [f"broker_unavailable: {e}"], now)
+            rec["pipeline"]["stages"].append({"stage": "execution", "ok": res.opened, "status": res.status,
+                                              "reasons": [res.reason] if res.reason else []})
             self.intents[cid]["status"] = res.status
             self._journal("orders", res.to_dict(), now, decision_id=did)
             if res.opened and res.ticket is not None and self.book.get(res.ticket) is None:
-                self.book.add(ManagedPosition(res.ticket, cid, did, sig.symbol, sig.setup, sig.direction, res.volume,
-                                              res.price or entry, res.sl or order.stop, res.tp or target, order.magic,
-                                              iso(now)))
+                self.book.add(ManagedPosition(res.ticket, cid, did, intent.symbol, intent.strategy, intent.direction,
+                                              res.volume, res.price or d.entry, res.sl or order.stop, res.tp or d.target,
+                                              order.magic, iso(now)))
                 self.risk.record_open(now)
                 self._journal("fills", res.to_dict(), now, decision_id=did, trade_id=str(res.ticket))
-                self._event("order_filled", ticket=res.ticket, symbol=sig.symbol, setup=sig.setup, volume=res.volume,
-                            price=res.price, slippage_points=res.slippage_points, status=res.status)
+                self._event("order_filled", ticket=res.ticket, symbol=intent.symbol, setup=intent.strategy,
+                            volume=res.volume, price=res.price, slippage_points=res.slippage_points, status=res.status)
             elif not res.opened:
-                self._event("order_not_filled", symbol=sig.symbol, setup=sig.setup, status=res.status,
+                self._event("order_not_filled", symbol=intent.symbol, setup=intent.strategy, status=res.status,
                             reason=res.reason)
                 if res.status == "unprotected_closed":
-                    self._alert("critical", f"{sig.symbol} fill had no SL at the broker and was closed: {res.reason}")
+                    self._alert("critical", f"{intent.symbol} fill had no SL at the broker and was closed: {res.reason}")
             self.broker_positions = self._safe_positions()
             self._persist()
             return self._decided(rec, res.status, [res.reason] if res.reason else [], now)
@@ -474,7 +491,7 @@ class TradingEngine:
             pos = self.broker.position(ticket)
             if pos is None:
                 return {"status": "rejected", "reason": "position is gone at the broker"}
-            res = self.executor.modify_stop(pos, new_sl)
+            res = self.execution.modify_position(pos, new_sl)
             if res.status == "filled":
                 self.book.update(ticket, stop=new_sl, last_stop_bar=bar.isoformat())
                 self._event("stop_moved", ticket=ticket, sl=new_sl)
@@ -482,6 +499,18 @@ class TradingEngine:
             return res.to_dict()
 
     # ================================================================== exits
+
+    def _cancel_orders(self, now: dt.datetime) -> None:
+        if not self.connected or not hasattr(self.execution, "cancel_atlas_orders"):
+            return
+        try:
+            results = self.execution.cancel_atlas_orders()
+        except BrokerUnavailable:
+            return
+        for r in results:
+            self._journal("orders", {**r.to_dict(), "action": "cancel"}, now)
+        if results:
+            self._event("orders_cancelled", count=len(results), failed=sum(r.status != "cancelled" for r in results))
 
     def _session_exits(self, now: dt.datetime) -> None:
         cutoff = self.settings.friday_flatten_utc
@@ -496,7 +525,7 @@ class TradingEngine:
 
     def _flatten(self, now: dt.datetime, reason: str) -> list[dict]:
         targets = self._atlas_positions()
-        results = self.executor.flatten(targets, reason)
+        results = self.execution.flatten(targets, reason)
         for pos, res in zip(targets, results):
             self._journal("orders", {**res.to_dict(), "action": "close"}, now, trade_id=str(pos.ticket))
         failed = [r for r in results if r.status != "closed"]
@@ -590,12 +619,12 @@ class TradingEngine:
                                               b.tp or intent["target"], b.magic, iso(b.time)))
                 self.risk.record_open(now)
                 if not b.sl or not b.tp:
-                    self.executor.restore_stops(b, intent["stop"], intent["target"])
+                    self.execution.modify_position(b, intent["stop"], intent["target"])
                 intent["status"] = "adopted"
                 return True, "adopted: the journal has its order"
             if self.settings.orphan_policy == "attach_sl" and b.sl:
                 return False, "unknown ATLAS position with an SL; left for the operator (attach_sl policy)"
-            res = self.executor.close(b, "orphan")
+            res = self.execution.close_position(b, "orphan")
             return (res.status == "closed"), f"closed as an orphan ({res.status}: {res.reason})"
         mine = self.book.get(f.ticket)
         if f.kind == "stop_tightened":
@@ -605,10 +634,10 @@ class TradingEngine:
             self.book.update(f.ticket, volume=b.volume)
             return True, "adopted the broker's volume"
         if f.kind in ("stop_missing", "stop_loosened", "target_mismatch"):
-            ok = self.executor.restore_stops(b, mine.stop, mine.target)
+            ok = self.execution.modify_position(b, mine.stop, mine.target).status == "filled"
             if ok:
                 return True, "restored the book's SL/TP at the broker"
-            res = self.executor.close(b, f"{f.kind}_unfixable")
+            res = self.execution.close_position(b, f"{f.kind}_unfixable")
             if res.status == "closed":
                 return True, "could not restore the SL/TP, so the position was closed"
             return False, "could not restore the SL/TP or close the position"
@@ -692,7 +721,9 @@ class TradingEngine:
                 "source": self.source, "as_of": iso(self.now()), "mode": self.cfg.mode,
                 "state": h["state"], "reasons": h["reasons"], "trading": dict(self.trading),
                 "new_trades_allowed": H.new_trades_allowed(h, self.trading["enabled"]),
-                "decision_provider": "rules_only",
+                "decision_provider": "rules_only" if not self.models.assignment else "per_strategy",
+                "decision_models": self.models.describe(),
+                "decision_settings": self.decision_settings.to_dict(),
                 "agent_intents": self._agent_status(),
                 "strategies": [s.name for s in self.sources],
                 "mt5_connected": self.connected,
@@ -815,12 +846,19 @@ class TradingEngine:
             if reasons:
                 out = {**rec, "outcome": "refused", "reasons": reasons}
             else:
-                sig = Signal(sym, AI.SETUP, "1", d, rec["stop"], now.replace(microsecond=0), rec["rr"],
-                             self.agent.magic_offset)
-                res = self.submit(sig)
+                # The agent's proposal as a v3 trade intent: its stop, its target and its stated probability.
+                # The engine sizes it; the stated probability counts only on this demo account (pipeline stage 5).
+                intent = TradeIntent(strategy=AI.SETUP, strategy_version="1", symbol=sym, direction=d, stop=rec["stop"],
+                                     decision_time=now.replace(microsecond=0), source="agent", target=rec["target"],
+                                     entry=rec["entry_quote"], reason=rec["thesis"], intent_id=intent_id,
+                                     p_estimate=rec["confidence"], magic_offset=self.agent.magic_offset)
+                res = self.submit(intent)
                 if res["outcome"] != "skipped":  # health or a disabled switch costs the agent nothing
                     self.agent_day["count"] += 1
-                out = {**rec, "decision_id": res["decision_id"], "outcome": res["outcome"], "reasons": res["reasons"]}
+                out = {**rec, "decision_id": res["decision_id"], "decision": res["decision"], "outcome": res["outcome"],
+                       "reasons": res["reasons"]}
+                if res["pipeline"].get("ev"):
+                    out["ev"] = res["pipeline"]["ev"]
                 pos = self.book.by_client_id(res["client_id"])
                 if pos is not None:
                     out.update(ticket=pos.ticket, volume=pos.volume, fill=pos.entry, broker_target=pos.target)
@@ -884,7 +922,7 @@ class TradingEngine:
                 if pos is None:
                     out = {"ticket": ticket, "status": "refused", "reasons": ["position is gone at the broker"]}
                 else:
-                    res = self.executor.close(pos, "agent_close")
+                    res = self.execution.close_position(pos, "agent_close")
                     self._journal("orders", {**res.to_dict(), "action": "close", "by": by}, now, trade_id=str(ticket))
                     self.broker_positions = self._safe_positions()
                     closed = self._close_missing(now)

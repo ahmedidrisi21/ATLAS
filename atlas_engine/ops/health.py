@@ -2,7 +2,8 @@
 
     NORMAL    all checks green                          trade normally
     DEGRADED  Jev p95 > 500 ms; spread > 2x median;     no new trades on the affected symbol
-              tick gap > 30 s in session
+              tick gap > 30 s in session; a decision
+              model failing >= 25% of its last calls
     HALT      MT5 disconnected > 60 s; reconciliation   no new trades on any symbol; alert
               mismatch; clock drift > 2 s; DB write
               failure; a heartbeat silent > 60 s
@@ -21,6 +22,8 @@ Telemetry (every key optional; a missing key counts as healthy):
     db_write_ok               False after a failed journal write
     heartbeat_age_s           {"engine": s, "adapter": s, "watchdog": s}
     jev_p95_ms                None when Jev is not the decision provider
+    model_failure_frac        worst share of a decision model's last 20 calls that timed out,
+                              crashed or answered out of schema (PRD v3 §25, §26)
     daily_loss_frac_of_firm   today's equity loss as a fraction of the firm's daily limit
     drawdown_frac_of_firm     drawdown as a fraction of the firm's max drawdown
     manual_kill               the operator's reason, or None
@@ -45,6 +48,7 @@ class Thresholds:
     mt5_disconnect_s: float = 60.0
     clock_drift_s: float = 2.0
     heartbeat_silence_s: float = 60.0
+    model_failure_frac: float = 0.25
     daily_loss_hard_frac: float = 0.75   # §19: hard stop at 75% of the firm's daily limit
     drawdown_stop_frac: float = 0.60     # §19: stop at 60% of the firm's max drawdown
 
@@ -80,6 +84,8 @@ def evaluate(t: dict, th: Thresholds = Thresholds()) -> dict:
     jev = t.get("jev_p95_ms")
     if jev is not None and jev > th.jev_p95_ms:
         degraded_all.append("jev_latency")
+    if (t.get("model_failure_frac") or 0) >= th.model_failure_frac:
+        degraded_all.append("model_failures")
 
     symbols = {}
     for sym, s in sorted((t.get("symbols") or {}).items()):

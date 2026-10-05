@@ -43,6 +43,8 @@ NUMERIC = (
 )
 CATEGORICAL = {"session": sessions.SESSIONS, "regime": REGIMES}
 PAYLOAD_KEYS = (*NUMERIC, "session", "regime", "setup")
+# Bump on any change to the keys, their units or the regime labels (PRD v3 §24: every prediction names it).
+FEATURE_SCHEMA_VERSION = "atlas-state-1"
 
 RETURN_LAGS = (1, 4, 16)
 

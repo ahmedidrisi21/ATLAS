@@ -11,7 +11,7 @@
 #   schedule    Hermes schedule; times are UTC
 #   job         health-check | alert-relay | reconciliation-report | card
 #   deliver     where printed output goes; "telegram" is the profile's home channel
-#   card        for job: card, the card to open once per period
+#   card        for job: card, the card to open once per period (hour, day, week or month)
 #   gated_on    not installed until that roadmap phase exists; `--enable-gated` installs it anyway (drills)
 #
 # FTMO's server day ends at 22:00 UTC in winter and 21:00 UTC in summer (UTC+2/+3).
@@ -37,6 +37,27 @@ jobs:
     job: reconciliation-report
     deliver: telegram
     what: Stores the hourly reconciliation report; speaks only on a mismatch or a stale reconcile.
+
+  atlas-trading-session:
+    profile: operations-monitor
+    schedule: "5 7-19 * * 1-5"
+    job: card
+    deliver: local
+    gated_on: T4
+    what: Hourly trading-session card for the trader profile (Hermes trading the demo account), London and New York hours.
+    card:
+      board: atlas-ops
+      assignee: trader
+      tenant: paper
+      period: hour
+      key: trading-session
+      title: Trading session
+      skills: [demo-trading]
+      body: |
+        Run one trading session on the demo account with the demo-trading skill: check the engine, your
+        record and open positions, read the live market and today's news, then trade, manage or stand
+        aside. Every intent carries a stop, a target, a confidence and a thesis. Report every intent,
+        refusals included, in R after costs. Never request holdout data.
 
   atlas-loss-clusters:
     profile: operations-monitor

@@ -1,7 +1,10 @@
 """The trading engine: the deterministic loop that owns the MT5 account (PRD §1, §12 layer 2, §21, §23).
 
-It holds no LLM and needs no agent: the agent runtime only reads it through
-the operations API (atlas_api/ops.py), whose one write is ``disable_trading``.
+It holds no LLM and needs no agent. The agent runtime reads it through the
+operations API (atlas_api/ops.py), whose one write is ``disable_trading``.
+On a demo account the ``trader`` profile may also send trade intents through
+the trading routes (atlas_api/trading.py, atlas_engine/agent_intents.py);
+each one takes the same health, risk and execution path as a signal.
 
 Each ``step`` (about once a second):
 
@@ -30,6 +33,7 @@ from collections import deque
 from pathlib import Path
 from typing import Callable
 
+from atlas_engine import agent_intents as AI
 from atlas_engine.adapters.broker import BrokerUnavailable
 from atlas_engine.config import EngineConfig
 from atlas_engine.execution import EntryOrder, ExecutionSettings, Executor, client_order_id
@@ -39,7 +43,7 @@ from atlas_engine.ops import health as H
 from atlas_engine.positions.book import ManagedPosition, PositionBook, iso
 from atlas_engine.reconciliation import diff, is_atlas
 from atlas_engine.risk import AccountSnapshot, RiskEngine, RiskState, TradeProposal
-from atlas_engine.strategies import Signal
+from atlas_engine.strategies import Signal, m1_frame
 
 MAX_EVENTS = 500
 SPREAD_SAMPLES = 300
@@ -65,8 +69,9 @@ class TradingEngine:
     def __init__(self, cfg: EngineConfig, settings: ExecutionSettings, broker, journal, state_dir: str | Path, *,
                  sources: list | None = None, now: Callable[[], dt.datetime] = utc_now, alerts=None,
                  operator_key: bytes | None = None, watchdog: Callable[[], str | None] | None = None,
-                 broker_label: str = "mt5"):
+                 broker_label: str = "mt5", agent: AI.AgentIntentSettings | None = None):
         self.cfg, self.settings, self.broker, self.journal = cfg, settings, broker, journal
+        self.agent = agent or AI.AgentIntentSettings()
         self.state_dir = Path(state_dir)
         self.inbox = self.state_dir / "operator-inbox"
         self.inbox.mkdir(parents=True, exist_ok=True)
@@ -94,6 +99,8 @@ class TradingEngine:
         self.requests: dict = saved.get("requests", {"day": None, "count": 0})
         self.last_state, self.last_reasons = saved.get("last_state", H.NORMAL), saved.get("last_reasons", [])
         self.friday_flattened: str | None = saved.get("friday_flattened")
+        self.agent_intents: dict[str, dict] = saved.get("agent_intents", {})  # intent_id -> record (idempotency)
+        self.agent_day: dict = saved.get("agent_day", {"day": None, "count": 0})
 
         self.db_ok = True
         self.connected = False
@@ -686,6 +693,7 @@ class TradingEngine:
                 "state": h["state"], "reasons": h["reasons"], "trading": dict(self.trading),
                 "new_trades_allowed": H.new_trades_allowed(h, self.trading["enabled"]),
                 "decision_provider": "rules_only",
+                "agent_intents": self._agent_status(),
                 "strategies": [s.name for s in self.sources],
                 "mt5_connected": self.connected,
                 "clock_drift_s": tel.get("clock_drift_s"),
@@ -738,6 +746,202 @@ class TradingEngine:
                     "note": "New trades are disabled. Open positions keep their broker-side stops. "
                             "Only the operator can re-enable, with a signed command on the engine host."}
 
+    # ================================================================== agent trading (atlas-trading, demo only)
+
+    def _agent_status(self) -> dict:
+        a = self.account
+        return {"enabled_modes": list(self.agent.enabled_modes), "demo_account": a.demo if a else None,
+                "intents_today": self._agent_count(self.now()), "max_intents_per_day": self.agent.max_intents_per_day,
+                "open_positions": len(self._agent_book()), "max_open_positions": self.agent.max_open_positions}
+
+    def _agent_count(self, now: dt.datetime) -> int:
+        day = str(self.cfg.prop.server_day(now))
+        if self.agent_day.get("day") != day:
+            self.agent_day = {"day": day, "count": 0}
+        return self.agent_day["count"]
+
+    def _agent_book(self) -> list[ManagedPosition]:
+        return [p for p in self.book if p.setup == AI.SETUP]
+
+    def _agent_gate(self) -> list[str]:
+        """Why the agent may not act on the account at all right now (empty when it may)."""
+        if not self.agent.enabled:
+            return ["agent_intents_disabled"]
+        if not self.connected or self.account is None:
+            return ["broker_unavailable"]
+        if not self.account.demo:
+            return ["not_a_demo_account"]
+        return []
+
+    def _agent_action(self, action: str, by: str, record: dict, now: dt.datetime, **ids) -> None:
+        self._journal("agent_actions", {"action": action, "by": by, **record}, now, **ids)
+
+    def agent_submit(self, by: str, intent_id: str, symbol: str, direction: str, stop: float, target: float,
+                     confidence: float, thesis: str) -> dict:
+        """One trade decided by the agent. Refusals come back as an outcome, never as an order."""
+        with self.lock:
+            now = self.now()
+            if intent_id in self.agent_intents:
+                return {**self.agent_intents[intent_id], "duplicate": True}
+            sym, d = AI.check_intent(intent_id, symbol, direction, stop, target, confidence, thesis, self.cfg.symbols)
+            rec = {"intent_id": intent_id, "by": by, "symbol": sym, "direction": d, "stop": float(stop),
+                   "target": float(target), "confidence": float(confidence), "thesis": thesis.strip(), "at": iso(now)}
+            reasons = self._agent_gate()
+            if reasons == ["not_a_demo_account"]:
+                self._alert("critical", f"{by} sent a trade intent while the engine is attached to a live account; "
+                                        "refused. Agent trading is demo only.")
+            if not reasons:
+                if self._agent_count(now) >= self.agent.max_intents_per_day:
+                    reasons.append("agent_daily_intent_limit")
+                if len(self._agent_book()) >= self.agent.max_open_positions:
+                    reasons.append("agent_open_position_limit")
+            if not reasons:
+                try:
+                    tick = self.broker.tick(sym)
+                except BrokerUnavailable as e:
+                    tick, reasons = None, [f"broker_unavailable: {e}"]
+                if tick is not None:
+                    entry = tick.price(d)
+                    risk, reward = d * (entry - rec["stop"]), d * (rec["target"] - entry)
+                    rec["entry_quote"] = entry
+                    if risk <= 0:
+                        reasons.append("stop_on_wrong_side_of_price")
+                    elif reward <= 0:
+                        reasons.append("target_on_wrong_side_of_price")
+                    else:
+                        rec["rr"] = round(reward / risk, 3)
+                        if not self.agent.min_rr <= rec["rr"] <= self.agent.max_rr:
+                            reasons.append(f"reward_to_risk_{rec['rr']}_outside_{self.agent.min_rr}-{self.agent.max_rr}")
+            if reasons:
+                out = {**rec, "outcome": "refused", "reasons": reasons}
+            else:
+                sig = Signal(sym, AI.SETUP, "1", d, rec["stop"], now.replace(microsecond=0), rec["rr"],
+                             self.agent.magic_offset)
+                res = self.submit(sig)
+                if res["outcome"] != "skipped":  # health or a disabled switch costs the agent nothing
+                    self.agent_day["count"] += 1
+                out = {**rec, "decision_id": res["decision_id"], "outcome": res["outcome"], "reasons": res["reasons"]}
+                pos = self.book.by_client_id(res["client_id"])
+                if pos is not None:
+                    out.update(ticket=pos.ticket, volume=pos.volume, fill=pos.entry, broker_target=pos.target)
+            self.agent_intents[intent_id] = out
+            self._agent_action("submit_trade_intent", by, out, now, decision_id=out.get("decision_id"))
+            self._event("agent_intent", by=by, intent_id=intent_id, symbol=sym, direction=d,
+                        outcome=out["outcome"], reasons=out["reasons"])
+            self._persist()
+            return out
+
+    def agent_intent_status(self, intent_id: str) -> dict:
+        with self.lock:
+            rec = self.agent_intents.get(intent_id)
+            if rec is None:
+                raise KeyError(f"no intent {intent_id!r} (the engine keeps the last 500)")
+            out = dict(rec)
+            if rec.get("ticket") is not None:
+                open_ = self.book.get(rec["ticket"]) is not None
+                out["position"] = "open" if open_ else "closed"
+                if not open_:
+                    closed = [t for t in self.journal.rows("trades", 50, trade_id=str(rec["ticket"]))]
+                    if closed:
+                        t = closed[-1]
+                        out["result"] = {k: t.get(k) for k in ("exit", "exit_time", "exit_reason", "pnl", "r")}
+            return out
+
+    def agent_positions(self) -> dict:
+        with self.lock:
+            out = []
+            for p in self._agent_book():
+                t = self.ticks.get(p.symbol)
+                first_stop = self.intents.get(p.client_id, {}).get("stop", p.stop)
+                risk = abs(p.entry - first_stop)
+                px = t.price(p.direction, closing=True) if t else None
+                out.append({"ticket": p.ticket, "symbol": p.symbol, "direction": "buy" if p.direction == 1 else "sell",
+                            "volume": p.volume, "entry": p.entry, "stop": p.stop, "target": p.target,
+                            "opened_at": p.opened_at, "price": px,
+                            "open_r": round(p.direction * (px - p.entry) / risk, 2) if px is not None and risk else None,
+                            "intent_id": next((i for i, r in self.agent_intents.items()
+                                               if r.get("ticket") == p.ticket), None)})
+            return {"source": self.source, "as_of": iso(self.now()), "positions": out, **self._agent_status()}
+
+    def _agent_own(self, ticket) -> ManagedPosition:
+        if isinstance(ticket, bool) or not isinstance(ticket, int):
+            raise AI.IntentRefused("ticket must be an integer")
+        mine = self.book.get(ticket)
+        if mine is None or mine.setup != AI.SETUP:
+            raise AI.IntentRefused(f"ticket {ticket} is not an open position the agent opened")
+        return mine
+
+    def agent_close(self, by: str, ticket: int, reason: str) -> dict:
+        """Close one of the agent's own positions at market."""
+        with self.lock:
+            now = self.now()
+            mine = self._agent_own(ticket)
+            gate = self._agent_gate()
+            if gate:
+                out = {"ticket": ticket, "status": "refused", "reasons": gate}
+            else:
+                pos = self.broker.position(ticket)
+                if pos is None:
+                    out = {"ticket": ticket, "status": "refused", "reasons": ["position is gone at the broker"]}
+                else:
+                    res = self.executor.close(pos, "agent_close")
+                    self._journal("orders", {**res.to_dict(), "action": "close", "by": by}, now, trade_id=str(ticket))
+                    self.broker_positions = self._safe_positions()
+                    closed = self._close_missing(now)
+                    out = {"ticket": ticket, "status": res.status, "reasons": [res.reason] if res.reason else [],
+                           "result": next(({k: t.get(k) for k in ("exit", "pnl", "r")} for t in closed
+                                           if t["ticket"] == ticket), None)}
+            self._agent_action("close_position", by, {**out, "why": reason}, now, decision_id=mine.decision_id,
+                               trade_id=str(ticket))
+            self._event("agent_close", by=by, ticket=ticket, status=out["status"])
+            self._persist()
+            return out
+
+    def agent_tighten(self, by: str, ticket: int, new_stop: float, reason: str) -> dict:
+        """Move the stop of one of the agent's own positions towards the price (never away)."""
+        with self.lock:
+            now = self.now()
+            mine = self._agent_own(ticket)
+            if isinstance(new_stop, bool) or not isinstance(new_stop, (int, float)) or new_stop <= 0:
+                raise AI.IntentRefused("new_stop must be a positive price")
+            gate = self._agent_gate()
+            if gate:
+                out = {"ticket": ticket, "status": "refused", "reasons": gate}
+            elif mine.direction * (float(new_stop) - mine.stop) <= 0:
+                out = {"ticket": ticket, "status": "rejected", "reasons": ["stops only tighten"]}
+            else:
+                res = self.move_stop(ticket, float(new_stop), now.replace(second=0, microsecond=0))
+                out = {"ticket": ticket, "status": res["status"], "reasons": [res["reason"]] if res.get("reason") else [],
+                       "stop": self.book.get(ticket).stop if self.book.get(ticket) else None}
+            self._agent_action("tighten_stop", by, {**out, "new_stop": new_stop, "why": reason}, now,
+                               decision_id=mine.decision_id, trade_id=str(ticket))
+            self._persist()
+            return out
+
+    def agent_market(self, symbols: list[str], timeframe: str, count: int) -> dict:
+        """Live quotes and closed bars from the broker for the agent's analysis."""
+        with self.lock:
+            now = self.now()
+            out = {}
+            for sym in symbols:
+                tick = self.ticks.get(sym) or self.broker.tick(sym)
+                pip = symbol_spec(sym).pip
+                rates = self.broker.m1_rates(sym, AI.m1_needed(timeframe, count))
+                bars = AI.resample_bars(m1_frame(rates, self.broker.clock), timeframe, count, now)
+                med = statistics.median(self.spreads[sym]) if self.spreads.get(sym) else None
+                out[sym] = {"bid": tick.bid, "ask": tick.ask, "quote_time": iso(tick.time),
+                            "spread_pips": round(tick.spread / pip, 2),
+                            "spread_median_pips": round(med / pip, 2) if med else None,
+                            "pip": pip, "bars": bars}
+            return {"source": self.source, "as_of": iso(now), "timeframe": timeframe, "symbols": out}
+
+    def agent_record(self) -> dict:
+        with self.lock:
+            trades = self.journal.rows("trades", 100_000)
+            intents = {r["intent_id"]: r for r in self.journal.rows("agent_actions", 100_000)
+                       if r.get("action") == "submit_trade_intent" and r.get("intent_id")}
+            return {"source": self.source, "as_of": iso(self.now()), **AI.scorecard(trades, intents)}
+
     # ================================================================== journal, events, state
 
     def _event(self, kind: str, **detail) -> None:
@@ -774,7 +978,8 @@ class TradingEngine:
                  "kill": self.kill, "seq": self.seq, "events": self.event_log[-MAX_EVENTS:], "nonces": self.nonces,
                  "intents": dict(list(self.intents.items())[-500:]), "mismatch_since": self.mismatch_since,
                  "requests": self.requests, "last_state": self.last_state, "last_reasons": self.last_reasons,
-                 "friday_flattened": self.friday_flattened}
+                 "friday_flattened": self.friday_flattened,
+                 "agent_intents": dict(list(self.agent_intents.items())[-500:]), "agent_day": self.agent_day}
         try:
             if not self.db_ok:
                 self.journal.probe()

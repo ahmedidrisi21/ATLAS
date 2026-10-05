@@ -8,10 +8,12 @@
     atlas-engine operator enable_trading --key ... --inbox /srv/atlas/engine/operator-inbox \\
                                          --operator yahye --reason "reviewed the incident, all clear"
     atlas-engine show --state /srv/atlas/engine
+    atlas-engine scorecard --state /srv/atlas/engine
 
 The API serves the same five operations routes as ``atlas-engine-sim`` (H3),
 so the Hermes side (atlas-operations, cron checks, dashboard) works unchanged
-when it is pointed at the real engine. Operator commands are signed files in
+when it is pointed at the real engine. It also serves the demo-only trading
+routes the ``trader`` profile uses (atlas_api/trading.py). Operator commands are signed files in
 the engine's inbox, never API calls.
 
 ``--broker mt5`` needs the ``MetaTrader5`` package and a logged-in terminal
@@ -31,7 +33,8 @@ from pathlib import Path
 
 from atlas_api import auth
 from atlas_api.auth import TokenStore
-from atlas_api.ops import ENGINE_SCOPES, OPS_ROUTES, OpsService
+from atlas_api.ops import ENGINE_SCOPES
+from atlas_api.trading import ENGINE_ROUTES, EngineService
 
 log = logging.getLogger("atlas_engine")
 
@@ -54,6 +57,7 @@ def _watchdog_reader(path: str | None):
 
 def build_engine(args):
     from atlas_engine.adapters.mt5 import MT5Adapter, ServerClock
+    from atlas_engine.agent_intents import load_agent_settings
     from atlas_engine.alerts import AlertOutbox
     from atlas_engine.config import load_engine_config
     from atlas_engine.execution import load_execution_settings
@@ -90,7 +94,7 @@ def build_engine(args):
             return f"ATLAS-WD 1 {int(time.time())} 0 OK"
     return TradingEngine(cfg, settings, adapter, journal, state, sources=load_strategies(args.config),
                          alerts=AlertOutbox(state / "alerts.jsonl"), operator_key=key,
-                         watchdog=watchdog, broker_label=label)
+                         watchdog=watchdog, broker_label=label, agent=load_agent_settings(args.config))
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -127,6 +131,9 @@ def main(argv: list[str] | None = None) -> None:
     s = sub.add_parser("show", help="print the engine's saved state (stopped or running)")
     s.add_argument("--state", required=True)
 
+    c = sub.add_parser("scorecard", help="closed trades in R after costs by setup, and Hermes's verdict")
+    c.add_argument("--state", required=True)
+
     args = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
@@ -151,11 +158,18 @@ def main(argv: list[str] | None = None) -> None:
         st = Journal(Path(args.state) / "journal.db", "show").load_state("engine") or {}
         print(json.dumps({k: st.get(k) for k in ("trading", "kill", "last_state", "last_reasons", "risk", "book",
                                                  "requests")}, indent=2, default=str))
+    elif args.cmd == "scorecard":
+        from atlas_engine.agent_intents import scorecard
+        from atlas_engine.journal import Journal
+        j = Journal(Path(args.state) / "journal.db", "scorecard")
+        intents = {r["intent_id"]: r for r in j.rows("agent_actions", 100_000)
+                   if r.get("action") == "submit_trade_intent" and r.get("intent_id")}
+        print(json.dumps(scorecard(j.rows("trades", 100_000), intents), indent=2))
     elif args.cmd == "run":
         from .http import make_server
         engine = build_engine(args)
-        server = make_server(OpsService(engine), TokenStore.load(Path(args.tokens), ENGINE_SCOPES),
-                             args.host, args.port, routes=OPS_ROUTES)
+        server = make_server(EngineService(engine), TokenStore.load(Path(args.tokens), ENGINE_SCOPES),
+                             args.host, args.port, routes=ENGINE_ROUTES)
         threading.Thread(target=server.serve_forever, name="ops-api", daemon=True).start()
         log.info("engine (%s) operations API on %s:%d, state %s", engine.source, args.host, args.port, args.state)
         try:

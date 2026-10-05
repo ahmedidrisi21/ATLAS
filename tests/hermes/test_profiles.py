@@ -16,11 +16,11 @@ ROSTER = yaml.safe_load((PROFILES / "roster.yaml").read_text())["profiles"]
 MANAGED = yaml.safe_load((DEPLOY / "managed" / "config.yaml").read_text())
 NAMES = sorted(ROSTER)
 
-# PRD §3: the ten specialist profiles.
+# PRD §3: the ten specialist profiles, plus the trader (Hermes trading the demo account, docs/hermes-trader.md).
 PRD_PROFILES = {
     "atlas-orchestrator", "market-researcher", "strategy-researcher", "backtest-engineer",
     "risk-analyst", "execution-engineer", "performance-analyst", "data-engineer",
-    "jev-analyst", "operations-monitor",
+    "jev-analyst", "operations-monitor", "trader",
 }
 # PRD §11: only engineering roles get a shell and file writes.
 ENGINEERING = {"backtest-engineer", "execution-engineer", "data-engineer"}

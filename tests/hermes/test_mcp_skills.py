@@ -31,6 +31,7 @@ PRD_MCP = {
     "data-engineer": {"atlas-market"},
     "jev-analyst": {"atlas-backtest"},
     "operations-monitor": {"atlas-operations"},
+    "trader": {"atlas-trading", "atlas-operations"},
 }
 # PRD §7 required sections, and the constraint lines every research skill carries.
 SECTIONS = ["Objective", "When to use", "Required inputs", "Procedure", "Tools", "Output format",
@@ -103,6 +104,9 @@ def test_scopes_follow_the_permission_model():
     assert scopes("operations-monitor") == {"ops:read", "ops:disable_trading"}
     assert scopes("execution-engineer") == {"ops:read"}
     assert {n for n in NAMES if "ops:disable_trading" in scopes(n)} == {"operations-monitor"}
+    # Only the trader trades, demo only (the engine checks the account), and it reads ops without disabling.
+    assert {n for n in NAMES if scopes(n) & {"trading:read", "trading:demo"}} == {"trader"}
+    assert scopes("trader") == {"trading:read", "trading:demo", "ops:read"}
     for n in NAMES:
         assert scopes(n) <= set(SCOPES) | set(ENGINE_SCOPES)
 
@@ -122,7 +126,7 @@ def test_scope_map_matches_the_servers():
     from mcp.client import Client
 
     from atlas_api.http import ROUTES
-    from atlas_api.ops import OPS_ROUTES
+    from atlas_api.trading import ENGINE_ROUTES
     from atlas_mcp.servers import SERVERS
 
     route_scope = {  # mirrors ResearchService and OpsService: each method's p.require(...)
@@ -131,6 +135,8 @@ def test_scope_map_matches_the_servers():
         "backtest/list_runs": "backtest:read", "backtest/summary": "backtest:read",
         "backtest/monte_carlo": "backtest:read", "journal": "journal:read", "performance": "performance:read",
         "operations": "ops:read", "operations/disable_trading": "ops:disable_trading",
+        "trading": "trading:read", "trading/submit_intent": "trading:demo",
+        "trading/close_position": "trading:demo", "trading/tighten_stop": "trading:demo",
     }
 
     def scope_of(route):
@@ -144,7 +150,9 @@ def test_scope_map_matches_the_servers():
             for t in (await c.list_tools()).tools:
                 calls.clear()
                 args = {k: {"symbol": "EURUSD", "symbols": ["EURUSD"], "timeframe": "H1", "window": "dev",
-                            "strategy": "s", "run_id": "r", "reason": "drill reason text"}[k]
+                            "strategy": "s", "run_id": "r", "reason": "drill reason text",
+                            "intent_id": "i-0001", "direction": "buy", "stop": 1.1, "target": 1.2,
+                            "confidence": 0.5, "thesis": "x" * 40, "ticket": 1, "new_stop": 1.15}[k]
                         for k in t.input_schema.get("required", [])}
                 await c.call_tool(t.name, args)
                 out[t.name] = calls["route"]
@@ -154,18 +162,18 @@ def test_scope_map_matches_the_servers():
         routes = asyncio.run(tool_routes(server))
         assert set(routes) == set(tools)
         for tool, route in routes.items():
-            assert route in (OPS_ROUTES if api_of(server) == "engine" else ROUTES)
+            assert route in (ENGINE_ROUTES if api_of(server) == "engine" else ROUTES)
             assert tools[tool] == scope_of(route), (server, tool, route)
 
 
 # ---------------------------------------------------------------- skills
 
 def test_skills():
-    # The first 8 (H2), incident-triage (H3) and exit-research (T1).
+    # The first 8 (H2), incident-triage (H3), exit-research (T1) and demo-trading (the trader).
     assert SKILL_NAMES == sorted([
         "forex-market-analysis", "trend-pullback-research", "session-breakout-research",
         "liquidity-sweep-research", "backtest-analysis", "mfe-mae-analysis", "risk-review", "data-quality",
-        "incident-triage", "exit-research"])
+        "incident-triage", "exit-research", "demo-trading"])
 
 
 def _skill(name):

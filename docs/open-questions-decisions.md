@@ -62,6 +62,8 @@ The broker is whatever MT5 server FTMO assigns. Before T4, rent short-term Windo
 
 No for v3, as §11 already argues. Revisit per strategy only after T9, through the promotion gate and operator signature.
 
+**Update 2026-10-05 (owner):** Hermes now trades the **demo** account itself, through the `trader` profile and `atlas-trading`, with every trade going through the engine's risk checks (docs/hermes-trader.md). Live agent trading stays a no for v3; the engine refuses agent trades on anything but a demo account.
+
 ## 7. Operator and approvals
 
 Owner decision: the owner is the **sole human operator**.

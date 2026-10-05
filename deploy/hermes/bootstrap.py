@@ -176,7 +176,7 @@ def issue_mcp_tokens(roster: dict, home: str | None, tokens_path: Path, api_url:
                      dry_run: bool, engine_tokens: Path | None = None, engine_url: str | None = None) -> None:
     """One scoped token per (profile, MCP server), written to the profile's .env.
 
-    Research-API servers use ``tokens_path``; engine servers (atlas-operations) use
+    Research-API servers use ``tokens_path``; engine servers (atlas-operations, atlas-trading) use
     ``engine_tokens`` with the engine's scope set. The cron scripts and the dashboard
     get their own ops:read engine tokens (EXTRA_ENGINE_TOKENS).
     """

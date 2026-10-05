@@ -30,6 +30,7 @@ atlas-mcp-backtest = "atlas_mcp.servers:main_backtest"
 atlas-mcp-journal = "atlas_mcp.servers:main_journal"
 atlas-mcp-performance = "atlas_mcp.servers:main_performance"
 atlas-mcp-operations = "atlas_mcp.servers:main_operations"
+atlas-mcp-trading = "atlas_mcp.servers:main_trading"
 atlas-engine-sim = "atlas_api.ops:main"
 atlas-engine = "atlas_api.engine_cli:main"
 

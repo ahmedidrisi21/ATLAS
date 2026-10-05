@@ -14,7 +14,7 @@ monitors, reconciles and serves the operations API, and never opens a trade.
 
 | | |
 | --- | --- |
-| Failure-injection suite, fake MT5 terminal | **38 of 38 pass.** Run `python tests/engine/t4_gate.py`. |
+| Failure-injection suite, fake MT5 terminal | **39 of 39 pass** (the 39th, agent trades on demo only, came with docs/hermes-trader.md). Run `python tests/engine/t4_gate.py`. |
 | Failure-injection suite, demo account | **Not run.** It needs the Windows VPS. See "Still owed". |
 | Watchdog EA | Written but **not compiled**. MetaEditor is Windows-only. |
 | Unit tests | 35 in `tests/engine/test_t4_units.py`. The full suite passes except the 2 dashboard failures already on `main` (see below). |
@@ -147,7 +147,9 @@ startup reconciliation is clean.
 
 The operations API is H3's exactly: five routes, and one write,
 `disable_trading`. A test checks that no route can enable, flatten, kill or
-touch risk, and that a read-only token gets 403 on the disable.
+touch risk, and that a read-only token gets 403 on the disable. The engine
+also serves the demo-only trading routes of the `trader` profile
+(docs/hermes-trader.md).
 
 ### Watchdog EA
 

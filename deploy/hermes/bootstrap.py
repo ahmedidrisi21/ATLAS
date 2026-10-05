@@ -57,7 +57,7 @@ from atlas_mcp.scopes import api_of, scopes_for, token_env_var  # noqa: E402
 
 # Engine tokens that are not MCP servers: (profile, .env variable) -> (token name, scopes).
 EXTRA_ENGINE_TOKENS = {
-    ("operations-monitor", "ATLAS_TOKEN_OPS_CRON"): ("operations-monitor/cron", ["ops:read"]),
+    ("atlas-operations", "ATLAS_TOKEN_OPS_CRON"): ("atlas-operations/cron", ["ops:read"]),
     ("atlas-orchestrator", "ATLAS_TOKEN_DASHBOARD"): ("atlas-orchestrator/dashboard", ["ops:read"]),
 }
 
@@ -114,10 +114,16 @@ def prune_skills(target: Path, skills: list[str], dry_run: bool) -> None:
                 shutil.rmtree(d)
 
 
-def install_profiles(h: Hermes, roster: dict, tiers: dict, home: str | None) -> None:
+def model_for(name: str, entry: dict, tiers: dict, overrides: dict | None = None) -> dict:
+    """A persona's provider and model (PRD v3 §6): its own override in models.yaml, else its tier's.
+    Hermes's per-profile provider config does the routing; ATLAS only writes the choice."""
+    return {**tiers[entry["tier"]], **((overrides or {}).get(name) or {})}
+
+
+def install_profiles(h: Hermes, roster: dict, tiers: dict, home: str | None, overrides: dict | None = None) -> None:
     for name, entry in roster.items():
         manifest = load_yaml(PROFILES_DIR / name / "distribution.yaml")
-        tier = tiers[entry["tier"]]
+        tier = model_for(name, entry, tiers, overrides)
         skills = entry.get("skills") or []
         print(f"profile {name} ({entry['tier']}: {tier['provider']}/{tier['model']}; skills: {', '.join(skills) or 'none'})")
         with tempfile.TemporaryDirectory(prefix="atlas-dist-") as tmp:
@@ -354,14 +360,22 @@ def main() -> None:
         raise SystemExit(f"hermes executable not found: {args.hermes}")
 
     roster = load_yaml(PROFILES_DIR / "roster.yaml")["profiles"]
-    tiers = load_yaml(Path(args.models))["tiers"]
+    models = load_yaml(Path(args.models))
+    tiers, overrides = models["tiers"], models.get("profiles") or {}
+    unknown = set(overrides) - set(roster)
+    if unknown:
+        raise SystemExit(f"{args.models} sets a model for unknown profile(s): {', '.join(sorted(unknown))}")
+    bad = [n for n, o in overrides.items() if not isinstance(o, dict) or set(o) - {"provider", "model", "base_url"}
+           or not o.get("provider") or not o.get("model")]
+    if bad:
+        raise SystemExit(f"{args.models}: profiles.{bad[0]} needs provider and model (and optionally base_url)")
     boards = load_yaml(DEPLOY_DIR / "boards.yaml")["boards"]
     missing = {e["tier"] for e in roster.values()} - set(tiers)
     if missing:
         raise SystemExit(f"{args.models} has no model for tier(s): {', '.join(sorted(missing))}")
 
     h = Hermes(args.hermes, args.hermes_home, args.dry_run)
-    install_profiles(h, roster, tiers, args.hermes_home)
+    install_profiles(h, roster, tiers, args.hermes_home, overrides)
     print("MCP tokens")
     issue_mcp_tokens(roster, args.hermes_home, Path(args.api_tokens), args.api_url, args.atlas_python, args.dry_run,
                      Path(args.engine_tokens), args.engine_url)

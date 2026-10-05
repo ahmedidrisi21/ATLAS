@@ -2,7 +2,7 @@
 
 It holds no LLM and needs no agent. The agent runtime reads it through the
 operations API (atlas_api/ops.py), whose one write is ``disable_trading``.
-On a demo account the ``trader`` profile may also send trade intents through
+On a demo account the ``atlas-trading`` profile may also send trade intents through
 the trading routes (atlas_api/trading.py, atlas_engine/agent_intents.py);
 each one takes the same health, risk and execution path as a signal.
 

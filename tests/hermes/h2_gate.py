@@ -6,10 +6,10 @@ from 2021-01-01), builds a throwaway Hermes home with deploy/hermes/bootstrap.py
 (which issues one scoped token per profile and MCP server), puts four cards on
 the atlas-research board and lets the Kanban dispatcher run them:
 
-    strategy-researcher   runs a backtest, then asks for the holdout twice
-    risk-analyst          Monte Carlo on that run (it is never offered run_backtest)
-    performance-analyst   performance summary and MFE/MAE on that run
-    market-researcher     market state, then bars reaching into the holdout
+    atlas-research   runs a backtest, then asks for the holdout twice
+    atlas-risk          Monte Carlo on that run (it is never offered run_backtest)
+    atlas-performance   performance summary and MFE/MAE on that run
+    atlas-market     market state, then bars reaching into the holdout
 
 A scripted OpenAI-compatible model (no key needed) plays each worker, so this
 proves the wiring, not model judgment: which MCP tools and skills each profile
@@ -52,7 +52,7 @@ from atlas_research.registry import Registry  # noqa: E402
 
 BOARD = "atlas-research"
 HOLDOUT = pd.Timestamp("2021-01-01", tz="UTC")
-DRILL = ["strategy-researcher", "risk-analyst", "performance-analyst", "market-researcher"]
+DRILL = ["atlas-research", "atlas-risk", "atlas-performance", "atlas-market"]
 INTO_HOLDOUT = {"start": "2020-12-01", "end": "2021-03-01"}
 
 
@@ -146,19 +146,19 @@ class DrillModel:
     def script(self, profile: str) -> list[tuple[str, dict]]:
         bt, mk = "atlas-backtest", "atlas-market"
         return {
-            "strategy-researcher": [
+            "atlas-research": [
                 (mcp(bt, "run_backtest"), {"strategy": "trend_pullback", "window": "validation"}),
                 (mcp(bt, "run_backtest"), {"strategy": "trend_pullback", "window": "holdout"}),
                 (mcp(bt, "run_backtest"), {"strategy": "trend_pullback", "window": INTO_HOLDOUT}),
             ],
-            "risk-analyst": [
+            "atlas-risk": [
                 (mcp(bt, "monte_carlo"), {"run_id": self.run_id, "sims": 1000}),
             ],
-            "performance-analyst": [
+            "atlas-performance": [
                 (mcp("atlas-performance", "performance_summary"), {"run_id": self.run_id, "by": "session"}),
                 (mcp("atlas-journal", "mfe_mae"), {"run_id": self.run_id}),
             ],
-            "market-researcher": [
+            "atlas-market": [
                 (mcp(mk, "collect_market_state"), {"symbols": ["EURUSD", "GBPUSD"]}),
                 (mcp(mk, "get_bars"), {"symbol": "EURUSD", "timeframe": "H1", "window": INTO_HOLDOUT}),
             ],
@@ -220,16 +220,16 @@ def drive(run: Run, model: DrillModel, timeout_s: int) -> dict[str, str]:
             args += ["--parent", p]
         return json.loads(run(*args, "--json"))["id"]
 
-    ids = {"strategy-researcher": create("strategy-researcher", "H2 drill: backtest through atlas-backtest")}
-    ids["market-researcher"] = create("market-researcher", "H2 drill: market state through atlas-market")
+    ids = {"atlas-research": create("atlas-research", "H2 drill: backtest through atlas-backtest")}
+    ids["atlas-market"] = create("atlas-market", "H2 drill: market state through atlas-market")
     deadline = time.time() + timeout_s
     while time.time() < deadline:
         run("-p", "atlas-orchestrator", "kanban", "--board", BOARD, "dispatch")
-        if model.run_id and "risk-analyst" not in ids:
+        if model.run_id and "atlas-risk" not in ids:
             # Children are created once the run exists, like a real handoff.
-            ids["risk-analyst"] = create("risk-analyst", "H2 drill: risk read-back", [ids["strategy-researcher"]])
-            ids["performance-analyst"] = create("performance-analyst", "H2 drill: journal and performance",
-                                                [ids["strategy-researcher"]])
+            ids["atlas-risk"] = create("atlas-risk", "H2 drill: risk read-back", [ids["atlas-research"]])
+            ids["atlas-performance"] = create("atlas-performance", "H2 drill: journal and performance",
+                                                [ids["atlas-research"]])
         states = {p: _task(run.json("kanban", "--board", BOARD, "show", i))["status"] for p, i in ids.items()}
         if len(ids) == 4 and all(s in ("done", "blocked") for s in states.values()):
             return states
@@ -279,34 +279,34 @@ def check(home: Path, tokens_path: Path, api, service, loader: SpyLoader, audit:
            ", ".join(pinned))
 
     # Work flowed through MCP to the API under each profile's own token.
-    bt = res("strategy-researcher", "run_backtest")
-    ok("strategy-researcher ran a backtest through MCP", model.run_id is not None and bt and bt[0]["ok"],
+    bt = res("atlas-research", "run_backtest")
+    ok("atlas-research ran a backtest through MCP", model.run_id is not None and bt and bt[0]["ok"],
        model.run_id or (str(bt[0]["value"])[:120] if bt else "no result"))
     entries = service.registry.entries("trend_pullback")
     ok("the run is recorded as an experiment by that profile's token",
-       [e["requested_by"] for e in entries] == ["strategy-researcher/atlas-backtest"]
+       [e["requested_by"] for e in entries] == ["atlas-research/atlas-backtest"]
        and entries[0]["experiment_id"] == model.run_id,
        ", ".join(e["requested_by"] for e in entries))
-    ok("risk-analyst ran Monte Carlo on that run", good("risk-analyst", "monte_carlo", "dd_p95_pct"))
-    ok("performance-analyst read performance and MFE/MAE",
-       good("performance-analyst", "performance_summary", "by_session")
-       and good("performance-analyst", "mfe_mae", "losers_reaching_1r"))
-    ok("market-researcher read market state", good("market-researcher", "collect_market_state", "atr_m15_pips"))
+    ok("atlas-risk ran Monte Carlo on that run", good("atlas-risk", "monte_carlo", "dd_p95_pct"))
+    ok("atlas-performance read performance and MFE/MAE",
+       good("atlas-performance", "performance_summary", "by_session")
+       and good("atlas-performance", "mfe_mae", "losers_reaching_1r"))
+    ok("atlas-market read market state", good("atlas-market", "collect_market_state", "atr_m15_pips"))
 
     # Refusals.
-    holdout = bt[1:] + res("market-researcher", "get_bars")
+    holdout = bt[1:] + res("atlas-market", "get_bars")
     ok("every holdout request was refused by the API",
        len(holdout) == 3 and all(not r["ok"] and "holdout_refused" in r["value"] for r in holdout),
        " | ".join(str(r["value"])[:80] for r in holdout))
     ok("the loader never read a holdout row", loader.calls and max(c[2] for c in loader.calls) <= HOLDOUT,
        f"{len(loader.calls)} loads, latest end {max(c[2] for c in loader.calls) if loader.calls else '-'}")
-    tok = _env(home, "risk-analyst").get(token_env_var("atlas-backtest"))
+    tok = _env(home, "atlas-risk").get(token_env_var("atlas-backtest"))
     status, body = dispatch(service, TokenStore.load(tokens_path), "backtest/run", tok,
                             {"strategy": "trend_pullback", "window": "dev"})
-    ok("the API refuses run_backtest with risk-analyst's own token", status == 403 and body["code"] == "forbidden",
+    ok("the API refuses run_backtest with atlas-risk's own token", status == 403 and body["code"] == "forbidden",
        f"{status} {body.get('code')}")
     runners = {who for who, route in audit.ok if route == "backtest/run"}
-    ok("only strategy-researcher's token started runs", runners == {"strategy-researcher/atlas-backtest"},
+    ok("only atlas-research's token started runs", runners == {"atlas-research/atlas-backtest"},
        ", ".join(sorted(runners)))
     return results
 

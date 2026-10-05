@@ -98,10 +98,10 @@ def test_servers_only_forward_to_their_own_routes():
 def api(service, tmp_path):
     """The real HTTP API on a free port, with one token per (profile, server) like bootstrap issues."""
     grants = {
-        "strategy-researcher/atlas-backtest": ["backtest:run", "backtest:read"],
-        "risk-analyst/atlas-backtest": ["backtest:read"],
-        "risk-analyst/atlas-journal": ["journal:read"],
-        "market-researcher/atlas-market": ["market:read"],
+        "atlas-research/atlas-backtest": ["backtest:run", "backtest:read"],
+        "atlas-risk/atlas-backtest": ["backtest:read"],
+        "atlas-risk/atlas-journal": ["journal:read"],
+        "atlas-market/atlas-market": ["market:read"],
     }
     tokens = TokenStore([{"name": n, "sha256": hash_token("t-" + n), "scopes": s} for n, s in grants.items()])
     httpd = make_server(service, tokens, "127.0.0.1", 0)
@@ -113,40 +113,40 @@ def api(service, tmp_path):
 
 
 def test_end_to_end_research_flow(api):
-    researcher = SERVERS["atlas-backtest"](api("strategy-researcher/atlas-backtest"))
+    researcher = SERVERS["atlas-backtest"](api("atlas-research/atlas-backtest"))
     err, text = _run(_call(researcher, "run_backtest", {"strategy": "session_breakout", "window": "validation"}))
     assert not err, text
     run_id = json.loads(text)["run_id"]
 
-    risk = SERVERS["atlas-backtest"](api("risk-analyst/atlas-backtest"))
+    risk = SERVERS["atlas-backtest"](api("atlas-risk/atlas-backtest"))
     err, text = _run(_call(risk, "monte_carlo", {"run_id": run_id, "sims": 500}))
     assert not err, text
     assert "dd_p95_pct" in json.loads(text)
     err, text = _run(_call(risk, "list_runs", {}))
     assert not err and run_id in text
 
-    journal = SERVERS["atlas-journal"](api("risk-analyst/atlas-journal"))
+    journal = SERVERS["atlas-journal"](api("atlas-risk/atlas-journal"))
     err, text = _run(_call(journal, "mfe_mae", {"run_id": run_id, "group_by": "session"}))
     assert not err, text
 
 
 def test_scope_refusal_reaches_the_agent_as_a_tool_error(api):
-    risk = SERVERS["atlas-backtest"](api("risk-analyst/atlas-backtest"))
+    risk = SERVERS["atlas-backtest"](api("atlas-risk/atlas-backtest"))
     err, text = _run(_call(risk, "run_backtest", {"strategy": "trend_pullback"}))
     assert err and "refused (forbidden)" in text and "backtest:run" in text
 
     # A token lifted from one server is still limited to its own scopes elsewhere.
-    wrong = SERVERS["atlas-market"](api("risk-analyst/atlas-journal"))
+    wrong = SERVERS["atlas-market"](api("atlas-risk/atlas-journal"))
     err, text = _run(_call(wrong, "get_bars", {"symbol": "EURUSD", "timeframe": "H1", "window": "dev"}))
     assert err and "refused (forbidden)" in text
 
 
 @pytest.mark.parametrize("window", ["holdout", {"start": "2020-12-01", "end": "2021-02-01"}], ids=str)
 def test_holdout_refusal_reaches_the_agent_as_a_tool_error(api, loader, window):
-    market = SERVERS["atlas-market"](api("market-researcher/atlas-market"))
+    market = SERVERS["atlas-market"](api("atlas-market/atlas-market"))
     err, text = _run(_call(market, "get_bars", {"symbol": "EURUSD", "timeframe": "H1", "window": window}))
     assert err and "refused (holdout_refused)" in text
-    backtest = SERVERS["atlas-backtest"](api("strategy-researcher/atlas-backtest"))
+    backtest = SERVERS["atlas-backtest"](api("atlas-research/atlas-backtest"))
     err, text = _run(_call(backtest, "run_backtest", {"strategy": "trend_pullback", "window": window}))
     assert err and "refused (holdout_refused)" in text
     assert loader.calls == []

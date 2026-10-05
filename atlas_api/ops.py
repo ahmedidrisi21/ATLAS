@@ -148,7 +148,7 @@ def main(argv: list[str] | None = None) -> None:
 
     t = sub.add_parser("token", help="issue an engine token; prints it once")
     t.add_argument("--tokens", required=True)
-    t.add_argument("--name", required=True, help="e.g. operations-monitor/atlas-operations")
+    t.add_argument("--name", required=True, help="e.g. atlas-operations/atlas-operations")
     t.add_argument("--scopes", required=True, help="comma-separated: " + ", ".join(ENGINE_SCOPES))
 
     i = sub.add_parser("init", help="(re)start the simulated engine healthy, trading enabled")

@@ -28,7 +28,7 @@ alone talks to MT5 and sizes trades.
 | Engine: agent trade intents, its own positions, live bars, the scorecard | `atlas_engine/agent_intents.py`, `atlas_engine/runtime.py` (`agent_*`) |
 | Engine API: seven trading routes, scopes `trading:read` and `trading:demo` | `atlas_api/trading.py`, `atlas_api/ops.py` |
 | MCP server `atlas-trading` | `atlas_mcp/servers.py`, `atlas_mcp/scopes.py` |
-| Hermes profile `trader` (frontier model tier) | `atlas-profiles/trader/`, `atlas-profiles/roster.yaml` |
+| Hermes profile `trader` (frontier model tier) | `atlas-profiles/atlas-trading/`, `atlas-profiles/roster.yaml` |
 | Skill `demo-trading`: one trading session, step by step | `atlas-skills/demo-trading/SKILL.md` |
 | Hourly "Trading session" card, weekdays 07:05-19:05 UTC | `deploy/hermes/cron.yaml` (`atlas-trading-session`) |
 | `atlas-engine scorecard --state ...` for the operator | `atlas_api/engine_cli.py` |
@@ -75,7 +75,7 @@ with the order). On top of that, rules in code, not config:
   reason, and positions carry their own magic number (base + 900).
 
 The trader gets no shell, no file access and no way to disable or enable
-trading; operations-monitor keeps `disable_trading`.
+trading; atlas-operations keeps `disable_trading`.
 
 ## How Hermes's record is measured
 
@@ -137,8 +137,8 @@ history.
    owed"): MT5 logged in to the **demo** account, watchdog EA compiled, engine
    running with `atlas-engine run`.
 2. Re-run `deploy/hermes/bootstrap.py` with `--engine-url` pointing at the
-   engine. It installs the `trader` profile and issues its two engine tokens
-   (`trader/atlas-trading` with `trading:read, trading:demo`;
+   engine. It installs the `atlas-trading` profile and issues its two engine tokens
+   (`atlas-trading/atlas-trading` with `trading:read, trading:demo`;
    `trader/atlas-operations` with `ops:read`).
 3. Enable trading with a signed operator command (`atlas-engine operator enable_trading ...`).
 4. Install the hourly card: it is gated on T4, so pass `--enable-gated` (which

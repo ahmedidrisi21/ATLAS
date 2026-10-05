@@ -1,9 +1,9 @@
 # One Hermes gateway per ATLAS bot profile (PRD §9, H0 gaps G1, G2, G4).
 #
 #   systemctl enable --now atlas-hermes-gateway@atlas-orchestrator   # hosts the Kanban dispatcher
-#   systemctl enable --now atlas-hermes-gateway@risk-analyst
-#   systemctl enable --now atlas-hermes-gateway@performance-analyst
-#   systemctl enable --now atlas-hermes-gateway@operations-monitor
+#   systemctl enable --now atlas-hermes-gateway@atlas-risk
+#   systemctl enable --now atlas-hermes-gateway@atlas-performance
+#   systemctl enable --now atlas-hermes-gateway@atlas-operations
 #
 # Kanban workers for every profile are spawned by the atlas-orchestrator
 # gateway and inherit its environment, so the managed policy and write root

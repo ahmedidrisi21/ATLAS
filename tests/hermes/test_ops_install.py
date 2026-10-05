@@ -42,7 +42,7 @@ def test_only_operations_monitor_passes_engine_settings_to_scripts():
     for name in ROSTER:
         cfg = yaml.safe_load((PROFILES / name / "config.yaml").read_text())
         passthrough = cfg["terminal"].get("env_passthrough")
-        if name == "operations-monitor":
+        if name == "atlas-operations":
             assert passthrough == ["ATLAS_ENGINE_URL", "ATLAS_TOKEN_OPS_CRON"]
             # The passed-through token must not reach an agent sandbox: this profile has no terminal or code tools.
             assert not {"terminal", "code_execution", "file"} & set(ROSTER[name]["toolsets"])
@@ -51,7 +51,7 @@ def test_only_operations_monitor_passes_engine_settings_to_scripts():
 
 
 def test_operations_monitor_needs_its_home_channel():
-    dist = yaml.safe_load((PROFILES / "operations-monitor" / "distribution.yaml").read_text())
+    dist = yaml.safe_load((PROFILES / "atlas-operations" / "distribution.yaml").read_text())
     assert "TELEGRAM_HOME_CHANNEL" in {e["name"] for e in dist["env_requires"]}
 
 
@@ -91,7 +91,7 @@ def test_prd_schedule_is_covered():
 
 
 def test_install_plugin_copies_into_every_profile(bootstrap, tmp_path):
-    stale = tmp_path / "profiles" / "risk-analyst" / "plugins" / "atlas" / "old.py"
+    stale = tmp_path / "profiles" / "atlas-risk" / "plugins" / "atlas" / "old.py"
     stale.parent.mkdir(parents=True)
     stale.write_text("x")
     bootstrap.install_plugin(ROSTER, str(tmp_path), False)
@@ -138,19 +138,19 @@ def test_install_cron_creates_updates_and_removes(bootstrap, tmp_path):
     assert {c[c.index("--name") + 1] for c in creates} == {
         "atlas-health-check", "atlas-alert-relay", "atlas-reconciliation-report"}
     hc = next(c for c in creates if "atlas-health-check" in c)
-    assert hc[:2] == ("-p", "operations-monitor") and "--no-agent" in hc and hc[hc.index("--deliver") + 1] == "telegram"
-    script = tmp_path / "profiles" / "operations-monitor" / "scripts" / "atlas_health_check.py"
+    assert hc[:2] == ("-p", "atlas-operations") and "--no-agent" in hc and hc[hc.index("--deliver") + 1] == "telegram"
+    script = tmp_path / "profiles" / "atlas-operations" / "scripts" / "atlas_health_check.py"
     assert "main('health-check', None)" in script.read_text()
 
     # Existing jobs (by name) are edited, not duplicated; a gated job that exists is removed.
-    jobs_json = tmp_path / "profiles" / "operations-monitor" / "cron" / "jobs.json"
+    jobs_json = tmp_path / "profiles" / "atlas-operations" / "cron" / "jobs.json"
     jobs_json.parent.mkdir(parents=True)
     jobs_json.write_text(json.dumps({"jobs": [{"id": "a1", "name": "atlas-health-check"},
                                               {"id": "b2", "name": "atlas-loss-clusters"},
                                               {"id": "c3", "name": "someone-elses-job"}]}))
     h = FakeHermes()
     bootstrap.install_cron(h, CRON, home, enable_gated=False, deliver="local")
-    assert ("-p", "operations-monitor", "cron", "remove", "b2") in h.calls
+    assert ("-p", "atlas-operations", "cron", "remove", "b2") in h.calls
     edit = next(c for c in h.calls if c[2:4] == ("cron", "edit"))
     assert edit[4] == "a1" and edit[edit.index("--deliver") + 1] == "local"
     assert not any("c3" in c for c in h.calls)
@@ -159,4 +159,4 @@ def test_install_cron_creates_updates_and_removes(bootstrap, tmp_path):
     bootstrap.install_cron(h, CRON, home, enable_gated=True, deliver="local")
     names = {c[c.index("--name") + 1] for c in h.calls if c[2:4] == ("cron", "create")}
     assert "atlas-calibration-review" in names and "atlas-daily-report" in names
-    assert any(c[:2] == ("-p", "performance-analyst") for c in h.calls)
+    assert any(c[:2] == ("-p", "atlas-performance") for c in h.calls)

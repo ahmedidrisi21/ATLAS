@@ -1,6 +1,6 @@
 """Hermes as a trader on the demo account: agent trade intents (PRD §6 ``atlas-trading``, §11).
 
-The ``trader`` Hermes profile decides trades itself and sends them as
+The ``atlas-trading`` Hermes profile decides trades itself and sends them as
 intents through the ``atlas-trading`` MCP server. The engine stays the only
 thing that touches MT5, and an intent gets no shortcut: it goes through the
 same health check, T3 risk engine, sizing and execution rules as a rule-based

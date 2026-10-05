@@ -498,7 +498,7 @@ def agent_trades_demo_only(tmp: Path):
         r = build(tmp / ("demo" if demo else "live"), clock, mt5=FakeMT5(clock, symbols=cfg.symbols, demo=demo))
         r.enable()
         t = r.adapter.tick("EURUSD")
-        out = r.engine.agent_submit("trader/atlas-trading", "drill-0001", "EURUSD", "buy", round(t.ask - 0.0015, 5),
+        out = r.engine.agent_submit("atlas-trading/atlas-trading", "drill-0001", "EURUSD", "buy", round(t.ask - 0.0015, 5),
                                     round(t.ask + 0.0030, 5), 0.45, thesis)
         if demo:
             assert out["outcome"] == "filled" and out["volume"] > 0, out

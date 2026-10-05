@@ -8,7 +8,7 @@ plugin, ops.yaml and the cron jobs, delivering locally), then drives:
 
     baseline      health check on a NORMAL engine: silent
     HALT          MT5 disconnect -> HALT alert and one incident card on atlas-ops;
-                  operations-monitor (incident-triage) reads health, status and
+                  atlas-operations (incident-triage) reads health, status and
                   reconciliation, disables new trades, blocks for the operator
     recovery      operator clears the fault and re-enables -> RECOVERED alert
     KILL          daily loss past the hard limit -> the engine flattens and disables
@@ -16,7 +16,7 @@ plugin, ops.yaml and the cron jobs, delivering locally), then drives:
     engine down   ops API stopped -> UNREACHABLE alert and card; the worker blocks
     relay         the alert-relay job delivers each non-health alert once, with budget alerts
     other jobs    hourly reconciliation report, a weekly card created once per week,
-                  execution-engineer offered read tools only, the dashboard tab's API
+                  atlas-execution offered read tools only, the dashboard tab's API
 
 A scripted OpenAI-compatible model (no key needed) plays the workers, so this
 proves the wiring, not model judgment.
@@ -73,7 +73,7 @@ class ReloadingEngineTokens:
 
 
 class OpsModel:
-    """Plays operations-monitor by the incident-triage procedure, and execution-engineer as a reader."""
+    """Plays atlas-operations by the incident-triage procedure, and atlas-execution as a reader."""
 
     def __init__(self):
         self.lock = threading.Lock()
@@ -119,10 +119,10 @@ class OpsModel:
     @staticmethod
     def next_step(profile: str, seen: dict) -> tuple[str, dict]:
         op = lambda tool: mcp(OPS_SERVER, tool)  # noqa: E731
-        if profile == "execution-engineer":
+        if profile == "atlas-execution":
             if "health_state" not in seen:
                 return op("health_state"), {}
-            return "kanban_complete", {"summary": "execution-engineer: read engine health (H3 drill)"}
+            return "kanban_complete", {"summary": "atlas-execution: read engine health (H3 drill)"}
         for tool in ("health_state", "system_status", "reconciliation_report"):
             if tool not in seen:
                 return op(tool), {}
@@ -210,7 +210,7 @@ class Drill:
         jobs = json.loads((self.home / "profiles" / profile / "cron" / "jobs.json").read_text())["jobs"]
         return next(j for j in jobs if j["name"] == name)
 
-    def cron(self, name: str, profile: str = "operations-monitor") -> str:
+    def cron(self, name: str, profile: str = "atlas-operations") -> str:
         """Run a cron job now and return what it would deliver ('' when silent)."""
         job = self.cron_job(profile, name)
         out_dir = self.home / "profiles" / profile / "cron" / "output" / job["id"]
@@ -250,7 +250,7 @@ class Drill:
 
     def scenarios(self, timeout_s: int) -> None:
         ok = self.ok
-        doctor = self.run("-p", "operations-monitor", "plugins", "doctor", "atlas", check=False)
+        doctor = self.run("-p", "atlas-operations", "plugins", "doctor", "atlas", check=False)
         ok("the atlas plugin passes hermes plugins doctor with its 5 hooks",
            "OK: runtime discovery" in doctor and "5 hook(s)" in doctor and "WARN" not in doctor,
            " / ".join(doctor.strip().splitlines()[-2:]))
@@ -279,8 +279,8 @@ class Drill:
            len(new) == 1 and new[0]["severity"] == "critical" and "HALT: mt5_disconnected" in new[0]["text"]
            and "Incident card" in new[0]["text"] and out == new[0]["text"] and again == "",
            new[0]["text"] if new else out)
-        ok("HALT: exactly one incident card, for operations-monitor", len(cards) == 1
-           and cards[0].get("assignee") == "operations-monitor", [(c.get("title"), c.get("assignee")) for c in cards])
+        ok("HALT: exactly one incident card, for atlas-operations", len(cards) == 1
+           and cards[0].get("assignee") == "atlas-operations", [(c.get("title"), c.get("assignee")) for c in cards])
         halt_id = cards[0]["id"] if cards else None
         show = _task(self.run.json("kanban", "--board", OPS, "show", halt_id)) if halt_id else {}
         ok("HALT: the card carries the incident-triage skill and the paper tenant",
@@ -288,15 +288,15 @@ class Drill:
            {k: show.get(k) for k in ("skills", "tenant", "created_by")})
         states = self.dispatch_until_settled(OPS, [halt_id], timeout_s)
         s = self.engine.status()
-        ok("HALT: operations-monitor disabled new trades through atlas-operations",
-           not s["trading"]["enabled"] and s["trading"]["by"] == "operations-monitor/atlas-operations",
+        ok("HALT: atlas-operations disabled new trades through atlas-operations",
+           not s["trading"]["enabled"] and s["trading"]["by"] == "atlas-operations/atlas-operations",
            s["trading"])
         ok("HALT: the worker blocked the card for the operator in one run", states[halt_id] == "blocked"
            and self.runs(halt_id) == 1, f"{states} runs={self.runs(halt_id)}")
-        mine = [r["tool"] for r in self.model.results if r["profile"] == "operations-monitor"]
+        mine = [r["tool"] for r in self.model.results if r["profile"] == "atlas-operations"]
         ok("HALT: the worker read health, status and reconciliation before disabling",
            mine[:4] == ["health_state", "system_status", "reconciliation_report", "disable_trading"], mine)
-        audit = [a for a in self.jsonl("audit", "agent_actions.jsonl") if a.get("profile") == "operations-monitor"]
+        audit = [a for a in self.jsonl("audit", "agent_actions.jsonl") if a.get("profile") == "atlas-operations"]
         ok("HALT: every MCP call is in the audit log with board, card and outcome",
            [a["tool"] for a in audit] == mine[:4] and all(a["board"] == OPS and a["kanban_task"] == halt_id
                                                           and a["outcome"] == "ok" for a in audit)
@@ -333,7 +333,7 @@ class Drill:
            out[:200])
         kill_id = kill[0]["id"] if kill else None
         states = self.dispatch_until_settled(OPS, [kill_id], timeout_s)
-        tools = [r["tool"] for r in self.model.results[n_calls:] if r["profile"] == "operations-monitor"]
+        tools = [r["tool"] for r in self.model.results[n_calls:] if r["profile"] == "atlas-operations"]
         s = self.engine.status()
         ok("KILL: engine flattened and disabled itself; the worker did not call disable_trading",
            s["open_positions"] == 0 and s["trading"]["by"] == "engine" and "disable_trading" not in tools
@@ -342,23 +342,23 @@ class Drill:
 
         # Execution-engineer: reads only.
         eng = json.loads(self.run("-p", "atlas-orchestrator", "kanban", "--board", OPS, "create",
-                                  "H3 drill: execution-engineer reads engine health", "--assignee",
-                                  "execution-engineer", "--tenant", "paper", "--body", "Read health_state, then complete.",
+                                  "H3 drill: atlas-execution reads engine health", "--assignee",
+                                  "atlas-execution", "--tenant", "paper", "--body", "Read health_state, then complete.",
                                   "--json"))["id"]
         self.dispatch_until_settled(OPS, [eng], timeout_s)
-        for p in ("operations-monitor", "execution-engineer"):
+        for p in ("atlas-operations", "atlas-execution"):
             offered = {t for t in self.model.offered.get(p, []) if t.startswith("mcp__")}
             expected = {mcp(sv, t) for sv, tl in (ROSTER[p].get("mcp") or {}).items() for t in tl}
             ok(f"{p} was offered exactly its roster MCP tools", offered == expected,
                f"extra: {sorted(offered - expected)} missing: {sorted(expected - offered)}" if offered != expected
                else ", ".join(sorted(t.split("__", 1)[1] for t in offered)))
-        ok("operations-monitor sees the incident-triage skill", "incident-triage" in
-           self.model.systems.get("operations-monitor", ""))
-        tok = _env(self.home, "execution-engineer").get("ATLAS_TOKEN_OPERATIONS")
+        ok("atlas-operations sees the incident-triage skill", "incident-triage" in
+           self.model.systems.get("atlas-operations", ""))
+        tok = _env(self.home, "atlas-execution").get("ATLAS_TOKEN_OPERATIONS")
         status, body = dispatch(OpsService(SimulatedEngine(self.state)), TokenStore.load(self.engine_tokens,
                                 ENGINE_SCOPES), "operations/disable_trading", tok, {"reason": "not mine to do (drill)"},
                                 OPS_ROUTES)
-        ok("the engine API refuses disable_trading with execution-engineer's own token",
+        ok("the engine API refuses disable_trading with atlas-execution's own token",
            status == 403 and body["code"] == "forbidden", f"{status} {body.get('code')}")
 
         # Scheduled cards are created once per period.

@@ -1,4 +1,7 @@
-# ATLAS profile roster (PRD §3, §9, §11), plus the trader profile (docs/hermes-trader.md).
+# ATLAS profile roster: the Hermes personas of PRD v3 §4-§5 (atlas-market, atlas-research,
+# atlas-backtest, atlas-journal, atlas-performance, atlas-operations, atlas-trading), the
+# orchestrator, and four supporting roles (atlas-risk, atlas-execution, atlas-data, atlas-models).
+# Hermes profiles are the personas: ATLAS adds no agent framework of its own (PRD v3 §3).
 #
 # One entry per Hermes profile. Each profile's Hermes content (SOUL.md,
 # config.yaml, distribution.yaml) lives in atlas-profiles/<name>/. This file
@@ -33,7 +36,7 @@ profiles:
       atlas-performance: [performance_summary]
     skills: [backtest-analysis]
 
-  market-researcher:
+  atlas-market:
     tier: cheap
     boards: [atlas-research]
     bot: null
@@ -42,7 +45,7 @@ profiles:
       atlas-market: [collect_market_state, get_bars, get_spread_stats]
     skills: [forex-market-analysis]
 
-  strategy-researcher:
+  atlas-research:
     tier: mid
     boards: [atlas-research]
     bot: null
@@ -51,7 +54,7 @@ profiles:
       atlas-backtest: [run_backtest, run_walk_forward, run_exit_research, monte_carlo, get_run_summary, list_runs]
     skills: [trend-pullback-research, session-breakout-research, liquidity-sweep-research, backtest-analysis, exit-research]
 
-  backtest-engineer:
+  atlas-backtest:
     tier: mid
     boards: [atlas-engineering, atlas-research]
     bot: null
@@ -60,7 +63,7 @@ profiles:
       atlas-backtest: [run_backtest, run_walk_forward, run_exit_research, monte_carlo, get_run_summary, list_runs]
     skills: [backtest-analysis, mfe-mae-analysis, exit-research]
 
-  risk-analyst:
+  atlas-risk:
     tier: mid
     boards: [atlas-research]
     bot: telegram          # "ATLAS Risk": operator group
@@ -71,16 +74,25 @@ profiles:
       atlas-performance: [performance_summary]
     skills: [risk-review, backtest-analysis]
 
-  execution-engineer:
+  atlas-execution:
     tier: mid
     boards: [atlas-engineering]
     bot: null
     toolsets: [terminal, file, code_execution, skills, memory, session_search, todo]
     mcp:
-      atlas-operations: [system_status, health_state, reconciliation_report]   # read only; trading is the trader profile's
+      atlas-operations: [system_status, health_state, reconciliation_report]   # read only; trading is the atlas-trading profile's
     skills: []             # execution-debugging and mt5-reconciliation arrive with T4
 
-  performance-analyst:
+  atlas-journal:
+    tier: cheap
+    boards: [atlas-research, atlas-ops]
+    bot: null
+    toolsets: [skills, memory, session_search, todo, code_execution]
+    mcp:
+      atlas-journal: [query_trades, mfe_mae, loss_clusters]
+    skills: [mfe-mae-analysis]
+
+  atlas-performance:
     tier: cheap
     boards: [atlas-ops, atlas-research]
     bot: telegram          # "ATLAS Analyst": daily and weekly reports
@@ -90,7 +102,7 @@ profiles:
       atlas-performance: [performance_summary]
     skills: [mfe-mae-analysis, backtest-analysis]
 
-  data-engineer:
+  atlas-data:
     tier: cheap
     boards: [atlas-engineering]
     bot: null
@@ -99,7 +111,7 @@ profiles:
       atlas-market: [collect_market_state, get_bars, get_spread_stats]
     skills: [data-quality]
 
-  jev-analyst:
+  atlas-models:
     tier: mid
     boards: [atlas-research]
     bot: null
@@ -108,7 +120,7 @@ profiles:
       atlas-backtest: [run_backtest, run_walk_forward, monte_carlo, get_run_summary, list_runs]
     skills: [backtest-analysis]
 
-  operations-monitor:
+  atlas-operations:
     tier: cheap
     boards: [atlas-ops]
     bot: telegram          # "ATLAS Operations": health and incidents
@@ -117,7 +129,7 @@ profiles:
       atlas-operations: [system_status, health_state, reconciliation_report, disable_trading]
     skills: [incident-triage]   # execution-debugging and mt5-reconciliation arrive with T4
 
-  trader:
+  atlas-trading:
     tier: frontier
     boards: [atlas-ops]
     bot: null              # trade and fill alerts come from the engine; reports via the hourly card

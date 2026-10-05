@@ -38,7 +38,7 @@ def rig(tmp_path):
 
 
 def test_intent_is_sized_and_filled_by_the_engine(rig):
-    out = rig.engine.agent_submit("trader/atlas-trading", **intent(rig))
+    out = rig.engine.agent_submit("atlas-trading/atlas-trading", **intent(rig))
     assert out["outcome"] == "filled", out
     assert out["volume"] > 0 and out["rr"] == pytest.approx(2.0, abs=0.05)
     [pos] = rig.engine.agent_positions()["positions"]
@@ -197,8 +197,8 @@ def test_mcp_to_engine_end_to_end(rig):
     from atlas_api.http import make_server
     from atlas_mcp.servers import SERVERS, ApiClient
 
-    store = tokens(**{"trader/atlas-trading": ["trading:read", "trading:demo"],
-                      "operations-monitor/atlas-operations": ["ops:read", "ops:disable_trading"]})
+    store = tokens(**{"atlas-trading/atlas-trading": ["trading:read", "trading:demo"],
+                      "atlas-operations/atlas-operations": ["ops:read", "ops:disable_trading"]})
     httpd = make_server(EngineService(rig.engine), store, "127.0.0.1", 0, routes=ENGINE_ROUTES)
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     url = f"http://127.0.0.1:{httpd.server_address[1]}"
@@ -209,12 +209,12 @@ def test_mcp_to_engine_end_to_end(rig):
             return r.is_error, r.content[0].text
 
     try:
-        err, text = asyncio.run(call("trader/atlas-trading", "submit_trade_intent", intent(rig)))
+        err, text = asyncio.run(call("atlas-trading/atlas-trading", "submit_trade_intent", intent(rig)))
         assert not err and json.loads(text)["outcome"] == "filled", text
-        err, text = asyncio.run(call("operations-monitor/atlas-operations", "submit_trade_intent",
+        err, text = asyncio.run(call("atlas-operations/atlas-operations", "submit_trade_intent",
                                      intent(rig, "i-other")))
         assert err and "trading:demo" in text
-        err, text = asyncio.run(call("trader/atlas-trading", "my_track_record", {}))
+        err, text = asyncio.run(call("atlas-trading/atlas-trading", "my_track_record", {}))
         assert not err and json.loads(text)["hermes"]["verdict"] == "too_early"
     finally:
         httpd.shutdown()

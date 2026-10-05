@@ -2,7 +2,7 @@
 
     atlas-engine run --config config --state /srv/atlas/engine --tokens engine-tokens.yaml \\
                      --operator-key /srv/atlas/engine/operator.key
-    atlas-engine token --tokens engine-tokens.yaml --name operations-monitor/atlas-operations \\
+    atlas-engine token --tokens engine-tokens.yaml --name atlas-operations/atlas-operations \\
                        --scopes ops:read,ops:disable_trading
     atlas-engine operator keygen --key /srv/atlas/engine/operator.key
     atlas-engine operator enable_trading --key ... --inbox /srv/atlas/engine/operator-inbox \\
@@ -13,7 +13,7 @@
 The API serves the same five operations routes as ``atlas-engine-sim`` (H3),
 so the Hermes side (atlas-operations, cron checks, dashboard) works unchanged
 when it is pointed at the real engine. It also serves the demo-only trading
-routes the ``trader`` profile uses (atlas_api/trading.py). Operator commands are signed files in
+routes the ``atlas-trading`` profile uses (atlas_api/trading.py). Operator commands are signed files in
 the engine's inbox, never API calls.
 
 ``--broker mt5`` needs the ``MetaTrader5`` package and a logged-in terminal

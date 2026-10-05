@@ -31,7 +31,7 @@ KEY = bytes(range(32))
 TEST_PRIOR = 0.45
 
 
-def test_models(**kw) -> ModelRegistry:
+def stand_in_models(**kw) -> ModelRegistry:
     from atlas_engine.setups import SETUPS
 
     return ModelRegistry.default(priors={s: TEST_PRIOR for s in SETUPS}, **kw)
@@ -120,7 +120,7 @@ def build(root: Path, clock: Clock | None = None, *, mt5: FakeMT5 | None = None,
     engine = TradingEngine(cfg, settings or ExecutionSettings(), adapter, journal, root / "state", now=clock,
                            alerts=AlertOutbox(root / "alerts.jsonl", senders=[]), operator_key=KEY,
                            watchdog=lambda: line[0], broker_label="fake-mt5", sources=sources,
-                           models=models or test_models())
+                           models=models or stand_in_models())
     rig = Rig(engine, mt5, adapter, journal, clock, root, line, config_root)
     if start:
         rig.beat()

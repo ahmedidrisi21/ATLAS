@@ -30,6 +30,7 @@ risk engine's own config (§29).
 from __future__ import annotations
 
 import datetime as dt
+import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -71,13 +72,17 @@ class DecisionSettings:
     max_target_r: float = 10.0
     max_spread_to_stop: float = 0.20  # §16 edge filter, as in research
     extra_cost_r: float = 0.0  # slippage allowance added to commission in C_R
+    jev_model: str = "jev-1.13.0"  # §7: a pinned TypeSafe model ID, never an alias
     defaults_used: tuple[str, ...] = ()
 
     def to_dict(self) -> dict:
         return asdict(self)
 
 
-KEYS = {"ev_min_r", "model_timeout_ms", "min_target_r", "max_target_r", "max_spread_to_stop", "extra_cost_r"}
+KEYS = {"ev_min_r", "model_timeout_ms", "min_target_r", "max_target_r", "max_spread_to_stop", "extra_cost_r",
+        "jev_model"}
+TEXT_KEYS = {"jev_model"}
+CALIBRATED_MODELS = {"gbm", "jev"}  # models whose raw output must be calibrated before a real-money trade (§24)
 
 
 def load_decision_settings(root: str | Path = "config") -> DecisionSettings:
@@ -90,12 +95,15 @@ def load_decision_settings(root: str | Path = "config") -> DecisionSettings:
     extra = set(raw) - KEYS
     if extra:
         raise ConfigError(f"{path}: unknown key(s) {', '.join(f'decision.{k}' for k in sorted(extra))}")
-    s = DecisionSettings(**{k: float(v) for k, v in raw.items()}, defaults_used=tuple(sorted(KEYS - set(raw))))
+    s = DecisionSettings(**{k: str(v) if k in TEXT_KEYS else float(v) for k, v in raw.items()},
+                         defaults_used=tuple(sorted(KEYS - set(raw))))
     checks = [(s.ev_min_r >= 0.0, "decision.ev_min_r must be >= 0"),
               (0 < s.model_timeout_ms <= 5000, "decision.model_timeout_ms must be in (0, 5000]"),
               (0 < s.min_target_r <= s.max_target_r <= 20, "decision needs 0 < min_target_r <= max_target_r <= 20"),
               (0 < s.max_spread_to_stop <= 0.5, "decision.max_spread_to_stop must be in (0, 0.5]"),
-              (s.extra_cost_r >= 0, "decision.extra_cost_r must be >= 0")]
+              (s.extra_cost_r >= 0, "decision.extra_cost_r must be >= 0"),
+              (bool(re.fullmatch(r"jev-\d+\.\d+\.\d+", s.jev_model)),
+               "decision.jev_model must be a pinned version such as jev-1.13.0, not an alias")]
     bad = [m for ok, m in checks if not ok]
     if bad:
         raise ConfigError(f"{path}: " + "; ".join(bad))
@@ -282,6 +290,9 @@ class DecisionPipeline:
         d.model = {**res.to_dict(), "ok": res.ok, "requested": name}
         if not res.ok:
             return self._fail(d, "model", [f"model_failure:{res.reason}"], model=name)
+        if name in CALIBRATED_MODELS and res.calibration_version == "none" and ctx.demo_account is not True:
+            # §24: a raw GBM or Jev probability is not a calibrated one; it may only trade a demo account.
+            return self._fail(d, "model", ["uncalibrated_model_needs_demo_account"], model=name)
         return self._pass(d, "model", **d.model)
 
     def _ev(self, i: TradeIntent, ctx: Context, d: EngineDecision) -> bool:

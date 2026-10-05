@@ -17,10 +17,10 @@ harness make. It enforces the §17 contract whatever sits behind it:
 - **No authority.** The response is a probability and a regime label. Jev
   never sees account balance and nothing here touches risk, size or orders.
 
-The transport is injected. ATLAS ships ``ReplayTransport`` (answers from a
-recorded file, for research replays and tests) and no network client: the
-vendor client, its endpoint and its credentials belong to the engine host's
-deployment, not this repository.
+The transport is injected. ``ReplayTransport`` answers from a recorded file,
+for research replays and tests; ``TypeSafeTransport`` (``typesafe.py``) calls
+TypeSafe's System One API. Its API key lives only in the engine host's
+environment, never in this repository.
 """
 
 from __future__ import annotations

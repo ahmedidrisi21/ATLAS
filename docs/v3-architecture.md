@@ -88,7 +88,7 @@ something to keep in mind when reading logs.
 | §25 Fail safe, 500 ms timeout | Built | `atlas_engine/models/base.py` (`SafeModel`) | Every model call has a hard timeout (`decision.model_timeout_ms`, default 500). Timeouts, crashes, a bad schema, an out-of-range or NaN probability, and a `latest` model version all become REJECT. |
 | §24 Calibration, versioning | Extended | `atlas_engine/calibration/` (T2) | Isotonic fit over the last 500 trades (T2). Now every estimate carries model version, calibration version (a hash of the fit), feature-schema version (`atlas-state-1`) and strategy version. All four are journaled. |
 | §23 Rules vs GBM vs Jev | Kept | `atlas_research/selection/`, `atlas-research t2 run` (T2) | Same data, same folds, same costs for every arm. Jev is selected for a strategy only after it wins there. |
-| Jev itself | Not yet | | Jev is TypeSafe AI's external model (`docs/open-questions-decisions.md`). ATLAS has no network client or key for it, by design: the client belongs to the engine host. A T2 run with Jev needs a setup with an edge first. |
+| Jev itself | Built (client only) | `atlas_engine/adapters/jev/typesafe.py`, `atlas_api/engine_cli.py` (`load_jev`) | `TypeSafeTransport` calls TypeSafe's System One API (`POST /v1/systemone`). One request asks a Noul question ("will price reach the target before the stop?"), whose yes-probability is `p_target_first`, and a Choice over the six regime labels. The state is the leakage-checked numbers only: no dates, prices, symbols or news. The model is pinned (`decision.jev_model`, default `jev-1.13.0`); an answer from any other model version is refused, so an alias moving can't change answers silently. The key comes only from `TYPESAFE_API_KEY` on the engine host. A 429, 529, error or slow answer is a REJECT, with no retry. The engine loads Jev only when a strategy names `model: jev` and the key is set. Without a fitted calibrator (`<state>/jev_calibration.json`) Jev may trade a demo account only. Nothing has been asked of the live API yet: no strategy has an edge to evaluate. |
 
 ## Phase 4: Execution (§14, §15, §27, §28)
 
@@ -135,6 +135,7 @@ decision:
   max_target_r: 10.0
   max_spread_to_stop: 0.20
   extra_cost_r: 0.0       # slippage allowance added to C_R
+  jev_model: jev-1.13.0   # §7: a pinned TypeSafe model ID; aliases such as jev-latest are refused
 ```
 
 In a strategy file (`config/strategies/<name>.yaml`, operator-signed):

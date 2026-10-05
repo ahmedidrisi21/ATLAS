@@ -97,13 +97,38 @@ def build_engine(args):
     sources = load_strategies(args.config)
     decision = load_decision_settings(args.config)
     priors, assignment = decision_config(sources)
-    # GBM and Jev load here once one has been trained and kept by T2 (PRD v3 §23). Until then a strategy that
-    # names them gets no estimate, so its trades are rejected rather than run on rules by default.
-    models = ModelRegistry.default(priors, assignment, timeout_ms=decision.model_timeout_ms)
+    # GBM loads here once one has been trained and kept by T2 (PRD v3 §23). A strategy that names a model that
+    # isn't loaded gets no estimate, so its trades are rejected rather than run on rules by default.
+    models = ModelRegistry.default(priors, assignment, timeout_ms=decision.model_timeout_ms,
+                                   extra=load_jev(assignment, decision, state))
     return TradingEngine(cfg, settings, adapter, journal, state, sources=sources,
                          alerts=AlertOutbox(state / "alerts.jsonl"), operator_key=key,
                          watchdog=watchdog, broker_label=label, agent=load_agent_settings(args.config),
                          decision=decision, models=models)
+
+
+def load_jev(assignment: dict, decision, state: Path, env: dict | None = None) -> list:
+    """Jev on TypeSafe's API, when a strategy is assigned to it and the host has ``TYPESAFE_API_KEY``.
+
+    The calibrator, if T2 has fitted one, is ``<state>/jev_calibration.json``. Without it the pipeline lets Jev
+    trade only a demo account (PRD v3 §24).
+    """
+    if "jev" not in assignment.values():
+        return []
+    from atlas_engine.adapters.jev import JevAdapter, TypeSafeTransport
+    from atlas_engine.calibration import Calibrator
+    from atlas_engine.models import JevModel
+
+    transport = TypeSafeTransport.from_env(timeout_s=decision.model_timeout_ms / 1000, env=env)
+    if transport is None:
+        log.warning("a strategy is assigned to jev but TYPESAFE_API_KEY is not set; its trades will be rejected")
+        return []
+    cal_path = Path(state) / "jev_calibration.json"
+    calibrator = Calibrator.from_json(cal_path.read_text()) if cal_path.exists() else None
+    if calibrator is None:
+        log.warning("jev has no calibrator at %s; it may trade a demo account only", cal_path)
+    adapter = JevAdapter(transport, decision.jev_model, live=True, timeout_ms=decision.model_timeout_ms)
+    return [JevModel(adapter, calibrator)]
 
 
 def main(argv: list[str] | None = None) -> None:

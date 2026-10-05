@@ -254,3 +254,8 @@ def test_decision_settings_default_to_the_prd(tmp_path):
     with pytest.raises(ConfigError):
         load_decision_settings(tmp_path)
     assert DecisionSettings().ev_min_r == 0.15
+
+
+def test_each_run_records_which_models_and_calibrations_served_it(rig):
+    rows = {r["model"]: r for r in rig.journal.rows("calibration_models")}
+    assert rows["rules"]["calibration_version"].startswith("priors-") and rows["agent_stated"]["model_version"]

@@ -41,7 +41,7 @@ Don't use for: backtests or research on history (you may already know what happe
    - No high-impact release on either currency in the next 30 minutes.
    - The spread is near its median.
    - The target is 1-5 times as far as the stop, and the stop sits beyond a level the market has respected, not at a round distance.
-   - Your confidence, honestly, is above 1 / (1 + reward-to-risk) plus a margin for costs. At 2R that means clearly above 0.33.
+   - Your honest confidence clears the engine's EV gate: confidence x reward-to-risk - (1 - confidence) - costs >= +0.15R. At 2R that means about 0.40 or more. The engine rejects anything below with `ev_below_min`; never inflate a confidence to get past it.
    Then `submit_trade_intent(intent_id, symbol, direction, stop, target, confidence, thesis)`. Use an `intent_id` like `YYYYMMDD-HHMM-SYMBOL`; reuse it if you retry after a timeout. If the engine refuses, record the reasons and don't resubmit with changed numbers.
 7. Write one memory note only if you learned something new, with the `intent_id` or `trade_id`.
 

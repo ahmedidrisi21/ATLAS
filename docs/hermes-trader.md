@@ -7,6 +7,15 @@ trades"). What does not change: agents never trade a live account in v3
 (PRD §11, open question 7), the operator alone enables trading, and the engine
 alone talks to MT5 and sizes trades.
 
+## Since the v3 rework (2026-10-05)
+
+Hermes's trades now take the same decision pipeline as every other proposal
+(`docs/v3-architecture.md`). The probability Hermes gives (`confidence`) has to
+clear the EV gate after costs: `confidence x reward/risk - (1 - confidence) - costs`
+must be at least +0.15R, or the engine rejects the trade with `ev_below_min`. At a
+2R target that means a stated chance of about 40% or better. The stated
+probability counts only on a demo account.
+
 ## The honest starting point
 
 - ATLAS tested twelve rule-based strategies on 2019 to mid-2025 data in seven
@@ -28,7 +37,7 @@ alone talks to MT5 and sizes trades.
 | Engine: agent trade intents, its own positions, live bars, the scorecard | `atlas_engine/agent_intents.py`, `atlas_engine/runtime.py` (`agent_*`) |
 | Engine API: seven trading routes, scopes `trading:read` and `trading:demo` | `atlas_api/trading.py`, `atlas_api/ops.py` |
 | MCP server `atlas-trading` | `atlas_mcp/servers.py`, `atlas_mcp/scopes.py` |
-| Hermes profile `trader` (frontier model tier) | `atlas-profiles/atlas-trading/`, `atlas-profiles/roster.yaml` |
+| Hermes profile `atlas-trading` (was `trader`; frontier model tier) | `atlas-profiles/atlas-trading/`, `atlas-profiles/roster.yaml` |
 | Skill `demo-trading`: one trading session, step by step | `atlas-skills/demo-trading/SKILL.md` |
 | Hourly "Trading session" card, weekdays 07:05-19:05 UTC | `deploy/hermes/cron.yaml` (`atlas-trading-session`) |
 | `atlas-engine scorecard --state ...` for the operator | `atlas_api/engine_cli.py` |

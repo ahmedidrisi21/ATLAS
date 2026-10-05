@@ -143,6 +143,15 @@ class TradingEngine:
                 self._event("broker_unavailable", detail=str(e))
             self._event("engine_started", mode=self.cfg.mode, config=self.cfg.checksum[:12],
                         trading_enabled=self.trading["enabled"], positions=len(self.book))
+            for name, m in self.models.models.items():  # PRD v3 §24: which model and calibration served this run
+                cal = getattr(m.model, "calibration_version", None)
+                if cal is None and getattr(m.model, "calibrator", None) is not None:
+                    from atlas_engine.calibration import calibration_version
+                    cal = calibration_version(m.model.calibrator)
+                self._journal("calibration_models", {"model": name, "model_version": getattr(m.model, "version", None),
+                                                     "calibration_version": cal or "none",
+                                                     "strategies": sorted(k for k, v in self.models.assignment.items()
+                                                                          if v == name)}, self.now())
             self.step(reconcile=True)
 
     def step(self, reconcile: bool = False) -> dict:

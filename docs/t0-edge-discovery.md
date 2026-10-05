@@ -82,7 +82,7 @@ Approved by the operator and declared (commit c6821c1) before any run.
 
 **T0 exit gate still not met after eight strategies (five setups, three timeframes).**
 
-### Round 4: channel breakout with trend exits (2026-10-05)
+### Round 7: channel breakout with trend exits (2026-10-05)
 
 Approved by the operator and declared (commit 050c6d8) before the run: round 3's
 entries and grid, with the §18 trend exit at its default (no target, no Friday
@@ -97,8 +97,14 @@ but the median trade is a full −1 R loss and only 2022 and H1 2025 were
 positive. Dev −0.115 R, validation −0.076 R. Removing the exit confound did
 not reveal an edge.
 
-**After four rounds and nine strategies, no setup passes T0 on EURUSD/GBPUSD
-2019–mid-2025.**
+Numbering: rounds 4–6 (fix reversal, swing trend following, carry-filtered
+trend) ran in parallel on the stacked branch `claude/project-thread-ufis3e`
+(PR #12), and round 5 already tested channel breakouts with a trail and no
+Friday flatten on seven pairs. This round is close to that one and agrees with
+it. Its deflated-Sharpe trial count (8) misses the round 5–6 trials, which are
+recorded only on that branch. That doesn't change the result, because it fails anyway.
+
+**No setup has passed T0 on 2019–mid-2025 data.**
 
 ## Running it
 

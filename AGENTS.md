@@ -11,10 +11,15 @@ is `docs/v3-architecture.md`; decisions are in `docs/`.
 - No code path may let an agent place live trades, change risk or enable trading (PRD §6, §11).
 - Every trade is a trade intent that goes through the engine's decision pipeline (PRD v3 §10, §11):
   `atlas_engine/intents.py`, `atlas_engine/pipeline.py`. Don't add another path to `atlas_engine.execution`
-  or an adapter; `tests/engine/test_v3_boundaries.py` fails if agent-facing code imports one.
+  or an adapter; `tests/engine/test_v3_boundaries.py` fails if agent-facing code, setups, strategies or
+  research import one.
+- ATLAS is futures-first (docs/futures.md): the engine sizes in whole contracts and decides from the exchange
+  calendar and the prop firm's rule file. An intent names a product and prices only, never contracts, an
+  order type or a broker field. Execution goes through `FuturesExecutionAdapter` and a `FuturesVenue`
+  (Tradovate first); a new platform is a new venue, never a second execution path.
 - Agents may trade the demo account only, and only the `atlas-trading` profile through the `atlas-trading`
   MCP server (docs/hermes-trader.md). Its trades go through the full pipeline; the engine refuses them
-  unless the broker reports a demo account. Don't widen it: no lot sizes, no live, no closing or
+  unless the broker reports a demo account. Don't widen it: no lot or contract sizes, no live, no closing or
   moving positions the agent didn't open, no stop moved away from the price.
 - Report every experiment you ran, failures included, in R after costs.
 - Run the tests for what you changed before you hand off.

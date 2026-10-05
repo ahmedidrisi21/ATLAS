@@ -6,22 +6,26 @@ closes and flattening, after the risk engine, a kill or the operator asked).
 Hermes, the MCP servers and the API never import this module or an adapter:
 ``tests/engine/test_v3_boundaries.py`` fails the build if one does.
 
-    submit_order(order, now)      one market order with its SL and TP attached
+    submit_order(order, now)      one market order with its SL and TP attached (a bracket, on futures)
     get_orders()                  pending orders at the platform
     get_positions()               open positions at the platform
     cancel_order(ticket)          remove one ATLAS pending order
+    modify_order(ticket, ...)     reprice one ATLAS pending order (never a protective stop)
     modify_position(pos, sl, tp)  move a position's SL (tighten only) or restore SL/TP
     get_account_state()           balance, equity, demo flag, trading allowed
     reconcile(book)               platform vs engine book differences (deterministic)
     flatten(reason)               close every ATLAS position
 
-``MT5ExecutionAdapter`` is the one implemented now: the MetaTrader 5 terminal
-on the engine's Windows host, through ``atlas_engine.adapters.mt5`` (the only
-code that calls the ``MetaTrader5`` package) and the T4 ``Executor`` (retries,
-deviation, unknown-outcome handling, never an unprotected position). cTrader
-and futures (Tradovate) adapters are placeholders in ``PLATFORMS`` until a
-market that needs them is chosen. Credentials live only in the adapter's host
-environment, never in this repo or in anything an agent can read (§30).
+Two are built. ``FuturesExecutionAdapter`` (``execution.futures``) is the
+futures-first path: generic bracket execution over a ``FuturesVenue``, with
+Tradovate (``atlas_engine.adapters.tradovate``) the first platform behind it.
+``MT5ExecutionAdapter`` is the MetaTrader 5 terminal on a Windows host, through
+``atlas_engine.adapters.mt5`` (the only code that calls the ``MetaTrader5``
+package) and the T4 ``Executor``; it stays for the forex work and its tests.
+Another platform (Rithmic, for one) is a new ``FuturesVenue`` subclass and a
+line in ``PLATFORMS``; nothing above it changes. Credentials live only in the
+adapter's host environment, never in this repo or in anything an agent can
+read (§30).
 """
 
 from __future__ import annotations
@@ -32,10 +36,11 @@ from atlas_engine.adapters.broker import AccountInfo, BrokerPosition
 from atlas_engine.reconciliation import diff, is_atlas
 
 from .executor import EntryOrder, ExecResult, Executor
+from .futures import FuturesExecutionAdapter
 from .settings import ExecutionSettings
 
 # Platform name -> adapter class, or None while not built. The engine refuses a platform with no adapter.
-PLATFORMS: dict[str, type | None] = {"mt5": None, "ctrader": None, "tradovate": None}
+PLATFORMS: dict[str, type] = {}
 
 
 @runtime_checkable
@@ -46,6 +51,7 @@ class ExecutionBroker(Protocol):
     def get_orders(self) -> list[dict]: ...
     def get_positions(self) -> list[BrokerPosition]: ...
     def cancel_order(self, ticket: int) -> ExecResult: ...
+    def modify_order(self, ticket: int, price: float | None = None, stop_price: float | None = None) -> ExecResult: ...
     def modify_position(self, pos: BrokerPosition, sl: float, tp: float | None = None) -> ExecResult: ...
     def close_position(self, pos: BrokerPosition, reason: str) -> ExecResult: ...
     def get_account_state(self) -> AccountInfo: ...
@@ -85,6 +91,10 @@ class MT5ExecutionAdapter:
         return ExecResult("cancelled" if ok else "failed", order["comment"], "" if ok else f"remove {res.retcode}: {res.comment}",
                           retcode=res.retcode, attempts=1)
 
+    def modify_order(self, ticket: int, price: float | None = None, stop_price: float | None = None) -> ExecResult:
+        """ATLAS sends market orders only on MT5, so there is never an ATLAS pending order to reprice."""
+        return ExecResult("rejected", "", f"no ATLAS pending order {ticket} to modify")
+
     def modify_position(self, pos: BrokerPosition, sl: float, tp: float | None = None) -> ExecResult:
         if tp is None:
             return self.executor.modify_stop(pos, sl)
@@ -113,11 +123,12 @@ class MT5ExecutionAdapter:
 
 
 PLATFORMS["mt5"] = MT5ExecutionAdapter
+PLATFORMS["tradovate"] = FuturesExecutionAdapter
 
 
 def execution_adapter(platform: str, broker, settings: ExecutionSettings) -> ExecutionBroker:
+    """The adapter for ``platform`` over ``broker`` (for futures, the platform's ``FuturesVenue``)."""
     cls = PLATFORMS.get(platform)
     if cls is None:
-        built = sorted(k for k, v in PLATFORMS.items() if v is not None)
-        raise ValueError(f"no execution adapter for {platform!r}; built: {', '.join(built)}")
+        raise ValueError(f"no execution adapter for {platform!r}; built: {', '.join(sorted(PLATFORMS))}")
     return cls(broker, settings)

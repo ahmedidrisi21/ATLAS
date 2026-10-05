@@ -1,0 +1,33 @@
+# Futures products ATLAS knows (futures-first, docs/futures.md). Facts about the
+# contracts, not risk settings: tick size, value per point, exchange, which
+# mini a micro shadows. Strategy logic never branches on these names.
+#
+# Sources, checked 2026-10-05:
+#   ES MES NQ MNQ YM MYM MGC tick size and tick value: FundedNext Futures help,
+#     "Contract Limits and Contract Types at FundedNext Futures".
+#   Everything else: CME contract specifications, which could not be fetched from
+#     this environment (cmegroup.com answers 403). Marked verified: false.
+# The live adapter compares tick size and value per point with what the broker
+# reports for the traded contract and refuses the symbol on any difference
+# (atlas_engine.futures.contracts.check_against_broker), so a wrong row here
+# stops trading rather than mis-sizing it.
+#
+# point_value: money per 1.0 price move per contract (the contract multiplier).
+# tick_value = tick_size x point_value. mini_equivalent: 1.0 for a mini, 0.1 for a
+# micro (prop firms count 10 micros as one mini). months: listed contract months.
+# rth: regular trading hours in the exchange zone, a label for features and
+# reports only; whether the engine may trade comes from the session calendar.
+
+products:
+  ES:  {exchange: CME,   currency: USD, tick_size: 0.25, point_value: 50.0,   group: us_equity_index, underlying: SPX,  months: HMUZ, session: cme_globex, rth: ["08:30", "15:00"], verified: true}
+  MES: {exchange: CME,   currency: USD, tick_size: 0.25, point_value: 5.0,    group: us_equity_index, underlying: SPX,  months: HMUZ, session: cme_globex, rth: ["08:30", "15:00"], mini: ES, verified: true}
+  NQ:  {exchange: CME,   currency: USD, tick_size: 0.25, point_value: 20.0,   group: us_equity_index, underlying: NDX,  months: HMUZ, session: cme_globex, rth: ["08:30", "15:00"], verified: true}
+  MNQ: {exchange: CME,   currency: USD, tick_size: 0.25, point_value: 2.0,    group: us_equity_index, underlying: NDX,  months: HMUZ, session: cme_globex, rth: ["08:30", "15:00"], mini: NQ, verified: true}
+  YM:  {exchange: CBOT,  currency: USD, tick_size: 1.0,  point_value: 5.0,    group: us_equity_index, underlying: DJIA, months: HMUZ, session: cme_globex, rth: ["08:30", "15:00"], verified: true}
+  MYM: {exchange: CBOT,  currency: USD, tick_size: 1.0,  point_value: 0.5,    group: us_equity_index, underlying: DJIA, months: HMUZ, session: cme_globex, rth: ["08:30", "15:00"], mini: YM, verified: true}
+  RTY: {exchange: CME,   currency: USD, tick_size: 0.10, point_value: 50.0,   group: us_equity_index, underlying: RUT,  months: HMUZ, session: cme_globex, rth: ["08:30", "15:00"], verified: false}
+  M2K: {exchange: CME,   currency: USD, tick_size: 0.10, point_value: 5.0,    group: us_equity_index, underlying: RUT,  months: HMUZ, session: cme_globex, rth: ["08:30", "15:00"], mini: RTY, verified: false}
+  CL:  {exchange: NYMEX, currency: USD, tick_size: 0.01, point_value: 1000.0, group: energy,          underlying: WTI,  months: FGHJKMNQUVXZ, session: cme_globex, rth: ["08:00", "13:30"], verified: false}
+  MCL: {exchange: NYMEX, currency: USD, tick_size: 0.01, point_value: 100.0,  group: energy,          underlying: WTI,  months: FGHJKMNQUVXZ, session: cme_globex, rth: ["08:00", "13:30"], mini: CL, verified: false}
+  GC:  {exchange: COMEX, currency: USD, tick_size: 0.10, point_value: 100.0,  group: metals,          underlying: GOLD, months: GJMQVZ, session: cme_globex, rth: ["07:20", "12:30"], verified: false}
+  MGC: {exchange: COMEX, currency: USD, tick_size: 0.10, point_value: 10.0,   group: metals,          underlying: GOLD, months: GJMQVZ, session: cme_globex, rth: ["07:20", "12:30"], mini: GC, verified: true}

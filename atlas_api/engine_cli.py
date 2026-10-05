@@ -16,16 +16,26 @@ when it is pointed at the real engine. It also serves the demo-only trading
 routes the ``atlas-trading`` profile uses (atlas_api/trading.py). Operator commands are signed files in
 the engine's inbox, never API calls.
 
-``--broker mt5`` needs the ``MetaTrader5`` package and a logged-in terminal
-on Windows. ``--broker fake`` runs the engine on the in-process fake terminal
-for drills: no network, no broker, no orders anywhere.
+``--broker`` must match ``execution.platform`` in atlas.yaml:
+
+    mt5             the ``MetaTrader5`` package and a logged-in terminal on Windows
+    fake            the in-process fake MT5 terminal, for drills
+    tradovate       Tradovate's API (futures-first, docs/futures.md). Credentials come only from the
+                    host environment: ATLAS_TRADOVATE_USER, _PASSWORD, _APP_ID, _APP_VERSION, _CID, _SEC,
+                    _DEVICE_ID; ATLAS_TRADOVATE_ENV is demo (default) or live; ATLAS_TRADOVATE_ACCOUNT
+                    picks the account when the login has several.
+    fake-tradovate  the in-process Tradovate stand-in, for drills
+
+The fakes use no network, no broker and send no orders anywhere.
 """
 
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import json
 import logging
+import os
 import sys
 import threading
 import uuid
@@ -70,8 +80,15 @@ def build_engine(args):
 
     cfg = load_engine_config(args.config, require_read_only=not args.allow_writable_config)
     settings = load_execution_settings(args.config)
+    platform = "tradovate" if args.broker in ("tradovate", "fake-tradovate") else "mt5"
+    if settings.platform != platform:
+        raise SystemExit(f"--broker {args.broker} needs execution.platform: {platform} in atlas.yaml "
+                         f"(it says {settings.platform})")
+    state = Path(args.state)
     clock = ServerClock(settings.server_tz, settings.server_offset_hours)
-    if args.broker == "mt5":
+    if platform == "tradovate":
+        adapter, label = tradovate_venue(args.broker, cfg, settings, state)
+    elif args.broker == "mt5":
         try:
             import MetaTrader5 as mt5  # noqa: N813 - Windows engine host only
         except ImportError:
@@ -82,8 +99,8 @@ def build_engine(args):
         from atlas_engine.runtime import utc_now
         mt5 = FakeMT5(utc_now, clock, symbols=cfg.symbols, live_quotes=True)
         label = "fake-mt5"
-    state = Path(args.state)
-    adapter = MT5Adapter(mt5, clock, settings.commission_per_lot)
+    if platform == "mt5":
+        adapter = MT5Adapter(mt5, clock, settings.commission_per_lot)
     journal = Journal(state / "journal.db", f"run-{uuid.uuid4().hex[:12]}")
     key = load_key(args.operator_key) if args.operator_key else None
     if key is None:
@@ -105,6 +122,37 @@ def build_engine(args):
                          alerts=AlertOutbox(state / "alerts.jsonl"), operator_key=key,
                          watchdog=watchdog, broker_label=label, agent=load_agent_settings(args.config),
                          decision=decision, models=models)
+
+
+def tradovate_venue(broker: str, cfg, settings, state: Path, env: dict | None = None):
+    """The Tradovate venue for the pinned contracts, real or the in-process stand-in."""
+    from atlas_engine.adapters.tradovate import Credentials, FakeTradovate, TradovateAdapter, TradovateClient
+    from atlas_engine.adapters.tradovate.fake import FakeQuoteBook
+    from atlas_engine.config import ConfigError
+    from atlas_engine.execution import pinned_contracts
+
+    env = os.environ if env is None else env
+    today = dt.datetime.now(dt.timezone.utc).date()
+    try:
+        pins = pinned_contracts(settings, cfg.symbols, today)
+    except ConfigError as e:
+        raise SystemExit(str(e)) from None
+    if not pins:
+        raise SystemExit("execution.platform tradovate trades futures; atlas.yaml lists no futures symbols")
+    common = dict(ledger_path=state / "tradovate-brackets.json", commission_per_contract=settings.commission_per_lot,
+                  poll_s=settings.broker_poll_s)
+    if broker == "tradovate":
+        try:
+            client = TradovateClient(env.get("ATLAS_TRADOVATE_ENV", "demo"), Credentials.from_env(env))
+        except ValueError as e:
+            raise SystemExit(str(e)) from None
+        venue = TradovateAdapter(client, pins, account_name=env.get("ATLAS_TRADOVATE_ACCOUNT"), **common)
+        return venue, f"tradovate-{client.env}"
+    expiry = dt.datetime.combine(today + dt.timedelta(days=60), dt.time(13, 30), dt.timezone.utc)
+    fake = FakeTradovate({code: expiry for code in pins.values()})
+    client = TradovateClient("demo", Credentials("drill", "pw", "atlas", "1", "0", "-", "drill"), transport=fake)
+    venue = TradovateAdapter(client, pins, quotes=FakeQuoteBook(fake), stream=False, **common)
+    return venue, "fake-tradovate"
 
 
 def load_jev(assignment: dict, decision, state: Path, env: dict | None = None) -> list:
@@ -143,7 +191,7 @@ def main(argv: list[str] | None = None) -> None:
     r.add_argument("--state", required=True, help="engine state directory (journal, inbox, alerts)")
     r.add_argument("--tokens", required=True, help="engine token hash file")
     r.add_argument("--operator-key", help="operator HMAC key file (mode 600)")
-    r.add_argument("--broker", choices=["mt5", "fake"], default="mt5")
+    r.add_argument("--broker", choices=["mt5", "fake", "tradovate", "fake-tradovate"], default="mt5")
     r.add_argument("--host", default="127.0.0.1")
     r.add_argument("--port", type=int, default=8742)
     r.add_argument("--poll", type=float, default=1.0, help="seconds between engine steps")

@@ -20,6 +20,12 @@ pluggable decision models with a fail-safe timeout, the common execution
 interface, and a journal you can rebuild a trade from. This change adds them
 and puts every trade, from a rule or from Hermes, through one pipeline.
 
+**Futures first (2026-10-05).** After this rework the owner moved ATLAS from
+MT5 forex to futures through a prop firm, Tradovate first. The pipeline,
+models, risk, journal and Hermes side were kept; contracts, sessions, sizing
+in contracts, prop rules as data and the execution adapter were added. See
+`docs/futures.md`.
+
 **No strategy has an edge yet.** T0 tested twelve strategies over seven
 rounds on real 2019 to mid-2025 data, and every one lost money after costs
 (`docs/t0-edge-discovery.md`). The PRD's three starter strategies (§18) are
@@ -94,10 +100,11 @@ something to keep in mind when reading logs.
 
 | PRD | Status | Where | Notes |
 | --- | --- | --- | --- |
-| §14 Common execution interface | Built | `atlas_engine/execution/broker_api.py` | `ExecutionBroker`: submit_order, get_orders, get_positions, cancel_order, modify_position, close_position, get_account_state, reconcile, flatten. Every order write in the engine now goes through it. |
-| MT5 adapter | Kept | `atlas_engine/adapters/mt5/`, `atlas_engine/execution/executor.py` (T4) | `MT5ExecutionAdapter` wraps them unchanged. |
-| cTrader, Tradovate adapters | Not yet | `PLATFORMS` in `broker_api.py` | Placeholders. The PRD says build them when a market needs them. The engine refuses a platform with no adapter. |
-| §15 No other path to the broker | Kept, now tested | `tests/engine/test_v3_boundaries.py` | Fails the build if the API, MCP servers or plugins import an order path, or if anything outside the engine host touches `MetaTrader5`. |
+| §14 Common execution interface | Built | `atlas_engine/execution/broker_api.py` | `ExecutionBroker`: submit_order, get_orders, get_positions, cancel_order, modify_order, modify_position, close_position, get_account_state, reconcile, flatten. Every order write in the engine now goes through it. The engine picks the adapter from `execution.platform`. |
+| Futures and Tradovate adapter | Built (futures-first) | `atlas_engine/execution/futures.py`, `atlas_engine/adapters/futures_venue.py`, `atlas_engine/adapters/tradovate/` | The owner moved ATLAS to futures first on 2026-10-05. `FuturesExecutionAdapter` places each entry as one bracket over a `FuturesVenue`; Tradovate is the first platform. Tested on a stand-in only; no Tradovate account yet. See `docs/futures.md`. |
+| MT5 adapter | Kept | `atlas_engine/adapters/mt5/`, `atlas_engine/execution/executor.py` (T4) | `MT5ExecutionAdapter` wraps them unchanged. Forex only now. |
+| cTrader, Rithmic | Not built | | No placeholders. A futures platform is one more `FuturesVenue` subclass and one line in `PLATFORMS`. |
+| §15 No other path to the broker | Kept, now tested | `tests/engine/test_v3_boundaries.py` | Fails the build if the API, MCP servers or plugins import an order path; if setups, strategies, features, intents or research reach one; if anything but the engine host builds a Tradovate adapter; or if anything outside the engine host touches `MetaTrader5`. |
 | §27 Reconciliation | Kept | `atlas_engine/reconciliation/` (T4) | |
 | §28 Kill switch | Extended | `atlas_engine/runtime.py` | A KILL already disabled trading, flattened, journaled and alerted. It now also cancels any ATLAS pending order. ATLAS sends only market orders, so normally there are none. The MT5 watchdog EA is the independent backstop (`watchdog/`). |
 

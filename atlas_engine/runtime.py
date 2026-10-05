@@ -1,4 +1,4 @@
-"""The trading engine: the deterministic loop that owns the MT5 account (PRD §1, §12 layer 2, §21, §23).
+"""The trading engine: the deterministic loop that owns the trading account (PRD §1, §12 layer 2, §21, §23).
 
 It holds no LLM and needs no agent. The agent runtime reads it through the
 operations API (atlas_api/ops.py), whose one write is ``disable_trading``.
@@ -9,14 +9,19 @@ each one takes the same health, risk and execution path as a signal.
 Each ``step`` (about once a second):
 
 1. Heartbeat, then apply any signed operator commands from the inbox.
-2. Read the terminal: connection, account, positions, one tick per symbol.
+2. Read the broker: connection, account, positions, one tick per symbol.
    Feed the account to the risk engine (T3) and flatten when it says so.
 3. Reconcile with the broker at startup and every ``reconcile_interval_s``.
 4. Evaluate health (atlas_engine.ops.health, shared with H3's simulator). A
    KILL flattens and disables trading; HALT and DEGRADED only block entries.
 5. Run the signal sources on closed bars and send what the risk engine
-   allows (``submit``). Apply session exits.
+   allows (``submit``). Apply session exits (the Friday cut-off, and the
+   prop firm's daily flat-by time through its ``PropPolicy``).
 6. Persist the restart state; a failed journal write is a HALT.
+
+Whether a symbol's market is open comes from one place, ``_session``: the
+exchange calendar for futures (atlas_engine.futures.sessions), the FX week
+otherwise. The execution adapter is picked by ``execution.platform``.
 
 Trading starts disabled on a fresh state and only the operator can enable it.
 After a restart the previous enable flag is kept, but no entry goes out
@@ -36,13 +41,15 @@ from typing import Callable
 from atlas_engine import agent_intents as AI
 from atlas_engine.adapters.broker import BrokerUnavailable
 from atlas_engine.config import EngineConfig
-from atlas_engine.execution import EntryOrder, ExecutionSettings, MT5ExecutionAdapter, client_order_id
+from atlas_engine.execution import EntryOrder, ExecutionSettings, client_order_id, execution_adapter
+from atlas_engine.futures import SessionCalendar, is_futures, product
 from atlas_engine.intents import TradeIntent, from_signal
 from atlas_engine.market_data.symbols import spec as symbol_spec
 from atlas_engine.models import ModelRegistry
 from atlas_engine.operator import ACTIONS, OperatorAuthError, verify
 from atlas_engine.ops import health as H
 from atlas_engine.pipeline import Context, DecisionPipeline, DecisionSettings
+from atlas_engine.prop_rules import StandardPropPolicy
 from atlas_engine.positions.book import ManagedPosition, PositionBook, iso
 from atlas_engine.reconciliation import diff, is_atlas
 from atlas_engine.risk import AccountSnapshot, RiskEngine, RiskState
@@ -86,14 +93,16 @@ class TradingEngine:
         self.watchdog = watchdog
         self.source = f"engine:{broker_label}"
         # The only path to the platform (PRD v3 §14, §15). Every order write below goes through it.
-        self.execution = execution or MT5ExecutionAdapter(broker, settings)
+        self.execution = execution or execution_adapter(settings.platform, broker, settings)
+        self.calendar = SessionCalendar(frozenset(dt.date.fromisoformat(str(d)) for d in settings.no_trade_days))
         self.decision_settings = decision or DecisionSettings()
         self.models = models or ModelRegistry.default(timeout_ms=self.decision_settings.model_timeout_ms)
         self.lock = threading.RLock()
 
         started = now()
         saved = self._load()
-        self.risk = RiskEngine(cfg, RiskState.from_dict(saved["risk"]) if saved.get("risk") else None)
+        self.risk = RiskEngine(cfg, RiskState.from_dict(saved["risk"]) if saved.get("risk") else None,
+                               StandardPropPolicy(cfg.prop, settings.entry_cutoff_min, settings.flatten_lead_min))
         self.pipeline = DecisionPipeline(self.decision_settings, self.models, self.risk)
         self.book = PositionBook.from_dict(saved.get("book"))
         self.trading = saved.get("trading") or {"enabled": False, "by": "engine", "at": iso(started),
@@ -241,7 +250,7 @@ class TradingEngine:
         sym = tick.symbol
         self.ticks[sym] = tick
         self.spreads[sym].append(tick.spread)
-        if market_open(now) and self.last_tick_time.get(sym) != tick.time:
+        if self._session(sym, now)[0] and self.last_tick_time.get(sym) != tick.time:
             self.drift.append((now, (now - tick.time).total_seconds()))  # a fresh tick: its age is ~latency + drift
         self.last_tick_time[sym] = tick.time
         while self.drift and (now - self.drift[0][0]).total_seconds() > DRIFT_WINDOW_S:
@@ -250,6 +259,20 @@ class TradingEngine:
             # The freshest tick bounds the drift: its age is latency plus drift, and a negative age
             # (a tick from our future) can only be drift.
             self.drift_estimate = min(a for _, a in self.drift)
+
+    def _session(self, symbol: str, now: dt.datetime) -> tuple[bool, str | None, dict | None]:
+        """(open, why closed, session detail) for one symbol: the exchange calendar for futures, else the FX week."""
+        if is_futures(symbol):
+            p = product(symbol)
+            st = self.calendar.status(p.session, p.rth, now)
+            return st.open, st.reason, st.to_dict()
+        open_ = market_open(now)
+        return open_, None if open_ else "market_closed", None
+
+    @staticmethod
+    def _pip(symbol: str) -> float:
+        """The unit spreads are reported in: the pip for forex, one tick for futures."""
+        return product(symbol).tick_size if is_futures(symbol) else symbol_spec(symbol).pip
 
     def _rates(self) -> dict[str, float]:
         return {s: (t.bid + t.ask) / 2 for s, t in self.ticks.items()}
@@ -303,10 +326,10 @@ class TradingEngine:
         if wd is not None or self.settings.require_watchdog:
             hb["watchdog"] = wd
         symbols = {}
-        open_ = market_open(now)
         for sym in self.cfg.symbols:
             t = self.ticks.get(sym)
-            pip = symbol_spec(sym).pip
+            pip = self._pip(sym)
+            open_ = self._session(sym, now)[0]
             med = statistics.median(self.spreads[sym]) if self.spreads[sym] else None
             symbols[sym] = {"spread_pips": round(t.spread / pip, 3) if t else None,
                             "spread_median_pips": round(med / pip, 3) if med else None,
@@ -352,7 +375,7 @@ class TradingEngine:
     def _write_watchdog_limits(self, now: dt.datetime) -> None:
         """The firm floors for the watchdog EA (watchdog/AtlasWatchdog.mq5), next to its heartbeat file."""
         hb = self.settings.watchdog_heartbeat_file
-        if not hb or self.account is None:
+        if not hb or self.account is None or getattr(self.broker, "clock", None) is None:
             return
         s, p = self.risk.state, self.cfg.prop
         lines = self.risk.lines()
@@ -413,17 +436,27 @@ class TradingEngine:
                     self.rules[intent.symbol] = rules
                 except BrokerUnavailable as e:
                     self._event("broker_unavailable", detail=str(e))
+            open_, closed_why, session = self._session(intent.symbol, now)
             ctx = Context(now=now, health=self.health_now, trading_enabled=self.trading["enabled"],
                           connected=self.connected and tick is not None, journal_ok=self.db_ok,
                           demo_account=self.account.demo if self.account is not None else None, tick=tick, rules=rules,
                           snapshot=self._snapshot(now) if self.account is not None else None, rates=self._rates(),
                           account_currency=self.cfg.currency,
                           already_handled=self.book.by_client_id(cid) is not None or cid in self.intents,
-                          market_open=market_open(now))
+                          market_open=open_, market_closed_reason=closed_why, session=session,
+                          roll_days=self.settings.roll_days)
             d = self.pipeline.evaluate(intent, ctx)
             self._drain_risk_events()
+            contract = getattr(rules, "contract", None)
             self._journal("market_states", {"symbol": intent.symbol, "bid": getattr(tick, "bid", None),
-                                            "ask": getattr(tick, "ask", None), "health": self.health_now.get("state"),
+                                            "ask": getattr(tick, "ask", None), "last": getattr(tick, "last", None),
+                                            "volume": getattr(tick, "volume", None),
+                                            "quote_time": tick.time.isoformat() if tick is not None else None,
+                                            "tick_size": getattr(rules, "point", None),
+                                            "tick_value": rules.spec.tick_value(self.cfg.currency)
+                                            if contract is not None else None,
+                                            "contract": contract.to_dict() if contract is not None else None,
+                                            "session": session, "health": self.health_now.get("state"),
                                             "symbol_health": self.health_now.get("symbols", {}).get(intent.symbol),
                                             "features": intent.features}, now, decision_id=did)
             if d.model is not None:
@@ -522,6 +555,9 @@ class TradingEngine:
             self._event("orders_cancelled", count=len(results), failed=sum(r.status != "cancelled" for r in results))
 
     def _session_exits(self, now: dt.datetime) -> None:
+        due = self.risk.policy.flatten_due(now)  # the prop firm's flat-by time, less ATLAS' margin
+        if due and self._atlas_positions():
+            self._flatten(now, due)
         cutoff = self.settings.friday_flatten_utc
         if not cutoff or now.weekday() != 4:
             return
@@ -583,6 +619,13 @@ class TradingEngine:
     def reconcile(self, now: dt.datetime | None = None) -> dict:
         with self.lock:
             now = now or self.now()
+            tidy = getattr(self.execution, "housekeeping", None)  # futures: stale stop/target legs of closed brackets
+            if tidy is not None:
+                try:
+                    for r in tidy(now):
+                        self._journal("orders", {**r.to_dict(), "action": "cancel_stale_leg"}, now)
+                except BrokerUnavailable as e:
+                    self._event("broker_unavailable", detail=str(e))
             self.broker_positions = self._safe_positions()
             self._close_missing(now)
             points = {s: r.point for s, r in self.rules.items()}
@@ -972,9 +1015,12 @@ class TradingEngine:
             out = {}
             for sym in symbols:
                 tick = self.ticks.get(sym) or self.broker.tick(sym)
-                pip = symbol_spec(sym).pip
-                rates = self.broker.m1_rates(sym, AI.m1_needed(timeframe, count))
-                bars = AI.resample_bars(m1_frame(rates, self.broker.clock), timeframe, count, now)
+                pip = self._pip(sym)
+                try:
+                    rates = self.broker.m1_rates(sym, AI.m1_needed(timeframe, count))
+                    bars = AI.resample_bars(m1_frame(rates, self.broker.clock), timeframe, count, now)
+                except BrokerUnavailable:
+                    bars = []  # a platform without a bar feed yet (docs/futures.md): quotes only
                 med = statistics.median(self.spreads[sym]) if self.spreads.get(sym) else None
                 out[sym] = {"bid": tick.bid, "ask": tick.ask, "quote_time": iso(tick.time),
                             "spread_pips": round(tick.spread / pip, 2),

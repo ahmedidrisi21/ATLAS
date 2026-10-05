@@ -51,7 +51,7 @@ AGENT_STRATEGY = "hermes"  # the one strategy name an agent may propose under (a
 # T3 risk-engine reasons, filed by stage for the audit record. Anything unlisted is "risk".
 _SIZING = ("sizing_failed", "no_risk_budget", "invalid_stop_distance", "invalid_tick_value", "min_volume_exceeds")
 _EXPOSURE = ("max_open_risk", "currency_risk_", "correlated_one_bet", "position_exists_for_setup")
-_PROP = ("prop_news_window", "firm_limit_headroom", "mode_not_tradeable", "account_firm_breached")
+_PROP = ("prop_", "firm_limit_headroom", "mode_not_tradeable", "account_firm_breached")
 
 
 def risk_stage(reason: str) -> str:
@@ -127,6 +127,9 @@ class Context:
     account_currency: str
     already_handled: bool = False
     market_open: bool = True
+    market_closed_reason: str | None = None  # why not, from the session calendar (futures) or the FX week
+    session: dict | None = None  # futures: SessionState.to_dict(), journaled with the decision
+    roll_days: int = 0  # futures: refuse a contract this many days before its last trade / first notice
 
 
 @dataclass
@@ -245,10 +248,20 @@ class DecisionPipeline:
 
     def _market(self, i: TradeIntent, ctx: Context, d: EngineDecision) -> bool:
         if not ctx.market_open:
-            return self._fail(d, "market", ["market_closed"])
+            return self._fail(d, "market", [ctx.market_closed_reason or "market_closed"], session=ctx.session)
+        contract = getattr(ctx.rules, "contract", None)
+        if contract is not None:
+            # Futures: never open a position in a contract that has expired or is due to roll.
+            block = contract.entry_block(ctx.now, ctx.roll_days)
+            if block:
+                return self._fail(d, "market", [block], contract=contract.to_dict())
         stop_dist = abs(d.entry - i.stop)
         spread = ctx.tick.spread
         detail = {"bid": ctx.tick.bid, "ask": ctx.tick.ask, "spread_to_stop": round(spread / stop_dist, 4)}
+        if ctx.session is not None:
+            detail["session"] = ctx.session
+        if contract is not None:
+            detail["contract"] = contract.to_dict()
         if spread > self.settings.max_spread_to_stop * stop_dist + 1e-12:
             return self._fail(d, "market", ["spread_too_wide_for_stop"], **detail)
         return self._pass(d, "market", **detail)
@@ -306,7 +319,7 @@ class DecisionPipeline:
 
     def _risk(self, i: TradeIntent, ctx: Context, d: EngineDecision) -> bool:
         prop = TradeProposal(i.symbol, i.strategy, i.direction, d.entry, i.stop, 1.0, ctx.rates,
-                             spec=ctx.rules.spec if ctx.rules is not None else None)
+                             spec=ctx.rules.spec if ctx.rules is not None else None, target=d.target)
         r = self.risk.check_entry(prop, ctx.snapshot)
         d.risk = r.to_dict()
         if not r.allowed:

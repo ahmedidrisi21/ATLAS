@@ -39,6 +39,9 @@ FORBIDDEN = {
     "override", "overrides", "prop_override", "ignore_limits", "skip_checks", "force",
     "credentials", "password", "api_key", "secret", "token", "login", "account",
     "magic", "deviation", "order_type", "type_filling", "filling", "comment", "ticket",
+    # Broker order fields (Tradovate and alike): an intent names a product and prices, never an order command.
+    "ordertype", "orderqty", "contractid", "contract_id", "accountid", "account_id", "accountspec", "clordid",
+    "client_order_id", "isautomated", "timeinforce", "time_in_force", "bracket1", "bracket2", "stopprice",
 }
 NAME = re.compile(r"^[a-z][a-z0-9_]{0,40}$")
 VERSION = re.compile(r"^[A-Za-z0-9_.-]{1,24}$")

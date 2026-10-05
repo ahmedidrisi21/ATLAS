@@ -15,6 +15,7 @@ from pathlib import Path
 
 import yaml
 
+from atlas_engine.futures.contracts import is_futures, product
 from atlas_engine.market_data.symbols import SYMBOLS
 from atlas_engine.prop_rules.rules import PropRules, _only, parse_prop_rules
 
@@ -99,9 +100,13 @@ def load_engine_config(root: str | Path = "config", require_read_only: bool = Fa
     if initial <= 0:
         raise ConfigError(f"{main_path}: account.initial_balance must be positive")
     symbols = tuple(s.upper() for s in _need(main, "symbols", main_path))
-    unknown = [s for s in symbols if s not in SYMBOLS]
+    unknown = [s for s in symbols if s not in SYMBOLS and not is_futures(s)]
     if unknown:
         raise ConfigError(f"{main_path}: unknown symbols {unknown}")
+    futs = [s for s in symbols if is_futures(s)]
+    if futs and (len(futs) != len(symbols) or futs != [product(s).root for s in futs]):
+        raise ConfigError(f"{main_path}: futures symbols are product roots (MES, not MESZ6) and can't be mixed "
+                          "with forex symbols; the execution contract is pinned in execution.contracts")
     if not prop.eas_allowed:
         raise ConfigError(f"{prop_path}: {prop.firm} does not allow EAs; ATLAS runs only where automation is permitted (PRD §19)")
 
@@ -148,6 +153,7 @@ def parse_risk(raw: dict, where: str = "risk") -> RiskConfig:
 def validate(cfg: EngineConfig) -> None:
     """Refuse any combination that is not strictly inside the firm's limits."""
     r, p = cfg.risk, cfg.prop
+    daily = p.max_loss_pct if p.daily_loss_pct is None else p.daily_loss_pct
     cap = MAX_RISK_PER_TRADE_EVAL if cfg.mode == "evaluation" else MAX_RISK_PER_TRADE
     checks = [
         (0 < r.risk_per_trade_pct <= cap, f"risk_per_trade_pct must be in (0, {cap}] in {cfg.mode} mode"),
@@ -166,7 +172,8 @@ def validate(cfg: EngineConfig) -> None:
         # Once the soft daily line stops new trades, the most still at risk is
         # the open risk to stops; together they must stay inside the firm's
         # daily loss. Same for the drawdown stop against the max loss.
-        (r.daily_loss_soft_pct_of_firm * p.daily_loss_pct + r.max_open_risk_pct < p.daily_loss_pct,
+        # With no firm daily limit the internal daily stops are shares of the max-loss allowance.
+        (r.daily_loss_soft_pct_of_firm * daily + r.max_open_risk_pct < daily,
          "daily soft stop plus max open risk must stay inside the firm's daily loss"),
         (r.drawdown_stop_pct_of_firm * p.max_loss_pct + r.max_open_risk_pct < p.max_loss_pct,
          "drawdown stop plus max open risk must stay inside the firm's max loss"),

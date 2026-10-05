@@ -34,6 +34,12 @@ def reconstruct(journal: Journal, decision_id: str) -> dict:
         "strategy_version": (pipeline.get("intent") or {}).get("strategy_version"),
         "ev": pipeline.get("ev"),
         "volume": pipeline.get("volume"),
+        # What the market, risk, prop and execution looked like when it was decided, as journaled then
+        # (never re-read from today's config or broker).
+        "market_state": out["market_states"][-1] if out["market_states"] else None,
+        "risk": out["risk_checks"][-1] if out["risk_checks"] else None,
+        "order": out["orders"][-1] if out["orders"] else None,
+        "fill": out["fills"][-1] if out["fills"] else None,
         "closed": [{k: t.get(k) for k in ("exit_reason", "pnl", "r")} for t in out["trades"]],
         "complete": bool(decision) and bool(out["market_states"]),
     }

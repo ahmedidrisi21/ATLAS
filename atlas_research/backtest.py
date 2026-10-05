@@ -9,6 +9,12 @@
 - One position per setup per symbol: signals during an open trade are skipped.
 - Commission and swap are charged in price units and converted to R.
 - Optional Friday flatten closes at market at the first bar at/after the cutoff.
+- Optional ATR trail (PRD §18): once the best price since entry is
+  ``atr_trail_after_r`` R in profit, the stop moves to best - mult x ATR at
+  each decision-bar close, using only closed bars; it only ever tightens and
+  applies from the next minute. ``rr=None`` removes the fixed target.
+- A signal may carry ``exit_by``: the trade closes at market at the first bar
+  at/after that time if neither stop nor target has been hit (time exit).
 """
 
 from __future__ import annotations
@@ -22,8 +28,11 @@ from atlas_engine.features import sessions
 
 TRADE_COLS = [
     "symbol", "setup", "direction", "decision_time", "atr", "entry_time", "exit_time", "entry", "stop", "target",
-    "exit", "risk", "exit_reason", "r_gross", "cost_r", "r", "mfe_r", "mae_r", "spread_entry", "rollovers",
+    "exit", "risk", "exit_reason", "r_gross", "cost_r", "r", "mfe_r", "mae_r", "spread_entry", "rollovers", "exit_by",
 ]
+
+
+NO_EXIT_BY = np.iinfo(np.int64).max
 
 
 @dataclass(frozen=True)
@@ -41,9 +50,23 @@ class CostModel:
 
 @dataclass(frozen=True)
 class ExitPolicy:
-    rr: float = 2.0
+    rr: float | None = 2.0  # None: no fixed target
     friday_flatten_utc: str | None = "20:00"
     max_entry_delay_min: int = 5
+    atr_trail_mult: float | None = None
+    atr_trail_after_r: float = 1.5
+
+
+@dataclass(frozen=True)
+class TrailFrame:
+    """Decision-bar closes and their ATR, for trailing stops."""
+
+    close_t: np.ndarray  # ns
+    atr: np.ndarray
+
+    @classmethod
+    def from_features(cls, features: pd.DataFrame) -> "TrailFrame":
+        return cls(pd.DatetimeIndex(features["close_time"]).as_unit("ns").asi8, features["atr"].to_numpy(float))
 
 
 class M1Path:
@@ -79,9 +102,14 @@ def simulate(
     exits: ExitPolicy = ExitPolicy(),
     symbol: str = "",
     path: M1Path | None = None,
+    trail: TrailFrame | None = None,
 ) -> pd.DataFrame:
     if signals.empty or m1.empty:
         return pd.DataFrame(columns=TRADE_COLS)
+    if exits.atr_trail_mult and trail is None:
+        raise ValueError("an ATR trail needs the decision-bar TrailFrame")
+    if exits.rr is None and not (exits.atr_trail_mult or exits.friday_flatten_utc):
+        raise ValueError("no target, trail or flatten: nothing would ever close the trade")
     p = path or M1Path(m1, costs.spread_mult)
     fri = p.friday_after(exits.friday_flatten_utc) if exits.friday_flatten_utc else None
     n = len(p.t)
@@ -89,8 +117,9 @@ def simulate(
     max_delay = np.int64(exits.max_entry_delay_min * 60 * 1_000_000_000)
     rows = []
     sig = signals.sort_values("decision_time")
-    cols = (pd.DatetimeIndex(sig["decision_time"]).as_unit("ns").asi8, sig["direction"], sig["stop"], sig["atr"], sig["setup"])
-    for dt_, d, stop, atr, setup in zip(*cols):
+    exit_by = (pd.DatetimeIndex(sig["exit_by"]).as_unit("ns").asi8 if "exit_by" in sig else np.full(len(sig), NO_EXIT_BY))
+    cols = (pd.DatetimeIndex(sig["decision_time"]).as_unit("ns").asi8, sig["direction"], sig["stop"], sig["atr"], sig["setup"], exit_by)
+    for dt_, d, stop, atr, setup, t_exit in zip(*cols):
         i0 = int(np.searchsorted(p.t, dt_, side="left"))
         if i0 >= n or p.t[i0] - dt_ > max_delay or p.t[i0] < busy_until:
             continue
@@ -101,8 +130,12 @@ def simulate(
         risk = d * (entry - stop)
         if risk <= 0:
             continue
-        target = entry + d * exits.rr * risk
-        j, exit_px, reason = _scan(p, i0, d, stop, target, fri, costs.stop_slippage)
+        target = entry + d * exits.rr * risk if exits.rr is not None else d * np.inf
+        if exits.atr_trail_mult:
+            j, exit_px, reason = _scan_trail(p, i0, d, stop, target, entry, risk, fri, costs.stop_slippage, t_exit, trail,
+                                             exits.atr_trail_mult, exits.atr_trail_after_r)
+        else:
+            j, exit_px, reason = _scan(p, i0, d, stop, target, fri, costs.stop_slippage, t_exit)
         busy_until = p.t[j] + 1
         hi = p.bid_h if d == 1 else p.ask_h
         lo = p.bid_l if d == 1 else p.ask_l
@@ -113,14 +146,16 @@ def simulate(
         r_gross = d * (exit_px - entry) / risk
         cost_r = (costs.commission_rt + nights * costs.swap_per_rollover) / risk
         rows.append(
-            (symbol, setup, d, pd.Timestamp(dt_, tz="UTC"), atr, entry_time, exit_time, entry, stop, target, exit_px, risk,
+            (symbol, setup, d, pd.Timestamp(dt_, tz="UTC"), atr, entry_time, exit_time, entry, stop,
+             target if np.isfinite(target) else np.nan, exit_px, risk,
              reason, r_gross, cost_r, r_gross - cost_r, max(fav, 0.0) / risk, max(adv, 0.0) / risk,
-             p.ask_o[i0] - p.bid_o[i0], nights)
+             p.ask_o[i0] - p.bid_o[i0], nights, pd.NaT if t_exit == NO_EXIT_BY else pd.Timestamp(t_exit, tz="UTC"))
         )
     return pd.DataFrame(rows, columns=TRADE_COLS)
 
 
-def _scan(p: M1Path, i0: int, d: int, stop: float, target: float, fri: np.ndarray | None, stop_slip: float):
+def _scan(p: M1Path, i0: int, d: int, stop: float, target: float, fri: np.ndarray | None, stop_slip: float,
+          t_exit: int = NO_EXIT_BY):
     """Find the exit bar. Returns (index, fill price, reason)."""
     n = len(p.t)
     chunk = 2048
@@ -134,9 +169,11 @@ def _scan(p: M1Path, i0: int, d: int, stop: float, target: float, fri: np.ndarra
             sl = p.ask_h[start:end] >= stop
             tp = p.ask_l[start:end] <= target
         flat = fri[start:end].copy() if fri is not None else np.zeros(end - start, bool)
+        timed = p.t[start:end] >= t_exit
         if start == i0:
             flat[0] = False  # never flatten on the entry bar itself
-        hit = sl | tp | flat
+            timed[0] = False
+        hit = sl | tp | flat | timed
         if hit.any():
             k = int(np.argmax(hit))
             j = start + k
@@ -147,7 +184,63 @@ def _scan(p: M1Path, i0: int, d: int, stop: float, target: float, fri: np.ndarra
                 return j, px, "gap_stop" if gapped else "stop"
             if tp[k]:
                 return j, target, "target"
-            return j, (p.bid_o[j] if d == 1 else p.ask_o[j]), "friday_flatten"
+            return j, (p.bid_o[j] if d == 1 else p.ask_o[j]), "friday_flatten" if flat[k] else "time_exit"
         start = end
     j = n - 1
     return j, (p.bid_c[j] if d == 1 else p.ask_c[j]), "end_of_data"
+
+
+def _scan_trail(p: M1Path, i0: int, d: int, stop: float, target: float, entry: float, risk: float,
+                fri: np.ndarray | None, stop_slip: float, t_exit: int, trail: TrailFrame, mult: float, after_r: float):
+    """Like ``_scan``, but the stop trails at each decision-bar close once in profit."""
+    n = len(p.t)
+    k = int(np.searchsorted(trail.close_t, p.t[i0], side="right"))  # first close after the entry minute
+    start, best, moved = i0, -np.inf, False
+    while start < n:
+        seg_t = trail.close_t[k] if k < len(trail.close_t) else np.iinfo(np.int64).max
+        end = min(max(int(np.searchsorted(p.t, seg_t, side="left")), start), n)
+        if end > start:
+            j, px, reason = _scan_segment(p, i0, start, end, d, stop, target, fri, stop_slip, t_exit)
+            if j is not None:
+                return j, px, ("trail_stop" if moved and reason == "stop" else reason)
+            seg_best = p.bid_h[start:end].max() if d == 1 else -p.ask_l[start:end].min()
+            best = max(best, seg_best)
+        if k >= len(trail.close_t):
+            break
+        a = trail.atr[k]
+        fav = best - entry if d == 1 else entry + best  # shorts track -(lowest ask) in ``best``
+        if np.isfinite(a) and fav >= after_r * risk:
+            new = (best - mult * a) if d == 1 else (-best + mult * a)
+            if d * (new - stop) > 0:
+                stop, moved = new, True
+        start, k = end, k + 1
+    j = n - 1
+    return j, (p.bid_c[j] if d == 1 else p.ask_c[j]), "end_of_data"
+
+
+def _scan_segment(p: M1Path, i0: int, start: int, end: int, d: int, stop: float, target: float,
+                  fri: np.ndarray | None, stop_slip: float, t_exit: int):
+    """First exit in bars [start, end) with a fixed stop; (None, None, None) if none."""
+    if d == 1:
+        sl = p.bid_l[start:end] <= stop
+        tp = p.bid_h[start:end] >= target
+    else:
+        sl = p.ask_h[start:end] >= stop
+        tp = p.ask_l[start:end] <= target
+    flat = fri[start:end].copy() if fri is not None else np.zeros(end - start, bool)
+    timed = p.t[start:end] >= t_exit
+    if start == i0:
+        flat[0] = False
+        timed[0] = False
+    hit = sl | tp | flat | timed
+    if not hit.any():
+        return None, None, None
+    k = int(np.argmax(hit))
+    j = start + k
+    if sl[k]:
+        o = p.bid_o[j] if d == 1 else p.ask_o[j]
+        gapped = j > i0 and d * (o - stop) < 0
+        return j, (o if gapped else stop) - d * stop_slip, "gap_stop" if gapped else "stop"
+    if tp[k]:
+        return j, target, "target"
+    return j, (p.bid_o[j] if d == 1 else p.ask_o[j]), "friday_flatten" if flat[k] else "time_exit"

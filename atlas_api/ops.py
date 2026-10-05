@@ -9,7 +9,8 @@
 This is the contract the real engine API implements in T4, on the trading host
 with its own token file. There is no route to enable trading, flatten, clear a
 kill or change any limit, and no scope that could authorize one: those are
-operator actions outside Hermes (PRD §11 layer 4, §23).
+operator actions outside Hermes (PRD §11 layer 4, §23). The real engine also
+serves the demo-only trading routes of atlas_api/trading.py.
 
 The real engine (atlas_engine/runtime.py, T4) serves them with ``atlas-engine
 run``; ``atlas-engine-sim serve`` still serves them over the simulated engine in
@@ -36,6 +37,10 @@ log = logging.getLogger("atlas_api")
 ENGINE_SCOPES = {
     "ops:read": "Engine status, health state, reconciliation report and event log",
     "ops:disable_trading": "Disable new trades. Cannot enable trading, flatten, or change any limit",
+    # The trading routes (atlas_api/trading.py). The engine refuses every agent trade unless the broker
+    # reports a demo account and the operator has enabled trading.
+    "trading:read": "The agent's live quotes and bars, its intents, open positions and track record",
+    "trading:demo": "Send trade intents and close or tighten the agent's own positions, on a demo account only",
 }
 
 OPS_ROUTES = {

@@ -4,8 +4,8 @@ deploy/hermes/bootstrap.py issues each (profile, server) token with exactly the
 scopes of the tools that profile is given in atlas-profiles/roster.yaml, so a
 profile allowed only to read backtests gets a token that cannot start one.
 
-Most servers call the research API. atlas-operations calls the engine API
-(simulated until T4), which has its own URL, token file and scope set.
+Most servers call the research API. atlas-operations and atlas-trading call
+the engine API, which has its own URL, token file and scope set.
 """
 
 SERVER_TOOLS = {
@@ -35,10 +35,19 @@ SERVER_TOOLS = {
         "reconciliation_report": "ops:read",
         "disable_trading": "ops:disable_trading",
     },
+    "atlas-trading": {
+        "get_live_market": "trading:read",
+        "submit_trade_intent": "trading:demo",
+        "get_intent_status": "trading:read",
+        "list_my_positions": "trading:read",
+        "close_my_position": "trading:demo",
+        "tighten_stop": "trading:demo",
+        "my_track_record": "trading:read",
+    },
 }
 
 # Which API a server's token belongs to. Anything not listed calls the research API.
-ENGINE_SERVERS = {"atlas-operations"}
+ENGINE_SERVERS = {"atlas-operations", "atlas-trading"}
 
 
 def api_of(server: str) -> str:

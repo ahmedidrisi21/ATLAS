@@ -1,4 +1,4 @@
-# ATLAS profile roster (PRD §3, §9, §11).
+# ATLAS profile roster (PRD §3, §9, §11), plus the trader profile (docs/hermes-trader.md).
 #
 # One entry per Hermes profile. Each profile's Hermes content (SOUL.md,
 # config.yaml, distribution.yaml) lives in atlas-profiles/<name>/. This file
@@ -77,7 +77,7 @@ profiles:
     bot: null
     toolsets: [terminal, file, code_execution, skills, memory, session_search, todo]
     mcp:
-      atlas-operations: [system_status, health_state, reconciliation_report]   # read only; atlas-trading (paper) arrives in T7
+      atlas-operations: [system_status, health_state, reconciliation_report]   # read only; trading is the trader profile's
     skills: []             # execution-debugging and mt5-reconciliation arrive with T4
 
   performance-analyst:
@@ -116,3 +116,14 @@ profiles:
     mcp:
       atlas-operations: [system_status, health_state, reconciliation_report, disable_trading]
     skills: [incident-triage]   # execution-debugging and mt5-reconciliation arrive with T4
+
+  trader:
+    tier: frontier
+    boards: [atlas-ops]
+    bot: null              # trade and fill alerts come from the engine; reports via the hourly card
+    toolsets: [web, skills, memory, session_search, todo]
+    mcp:
+      atlas-trading: [get_live_market, submit_trade_intent, get_intent_status, list_my_positions, close_my_position,
+                      tighten_stop, my_track_record]   # the engine refuses every trade unless the account is demo
+      atlas-operations: [system_status, health_state]   # read only
+    skills: [demo-trading]

@@ -276,6 +276,8 @@ def reconciliation_report(client: Callable[..., dict], now: dt.datetime | None =
 
 
 def period_of(kind: str, now: dt.datetime) -> str:
+    if kind == "hour":
+        return f"{now:%Y-%m-%dT%H}"
     if kind == "day":
         return f"{now:%Y-%m-%d}"
     if kind == "week":

@@ -67,7 +67,7 @@ def test_cron_job_spec(name):
     if spec["job"] == "card":
         card = spec["card"]
         assert card["board"] in BOARDS and card["assignee"] in ROSTER
-        assert card["period"] in ("day", "week", "month") and card["key"] and card["body"].strip()
+        assert card["period"] in ("hour", "day", "week", "month") and card["key"] and card["body"].strip()
         assert card.get("tenant") in [None, *BOARDS[card["board"]]["tenants"]]
         for skill in card.get("skills") or []:
             assert skill in (ROSTER[card["assignee"]].get("skills") or []), (name, skill)
@@ -81,7 +81,7 @@ def test_prd_schedule_is_covered():
     assert schedules["atlas-health-check"] == "every 15m"
     assert schedules["atlas-reconciliation-report"] == "0 * * * *"
     periods = sorted(s["card"]["period"] for s in CRON.values() if s["job"] == "card")
-    assert periods == ["day", "day", "month", "week", "week", "week"]
+    assert periods == ["day", "day", "hour", "month", "week", "week", "week"]
     # What runs today needs nothing from later phases.
     assert {n for n, s in CRON.items() if not s.get("gated_on")} == {
         "atlas-health-check", "atlas-alert-relay", "atlas-reconciliation-report"}

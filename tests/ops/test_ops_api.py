@@ -33,7 +33,8 @@ def call(service, tokens, route, token, args=None):
 
 def test_contract():
     assert set(ROUTE_SCOPE) == set(OPS_ROUTES)
-    assert set(ENGINE_SCOPES) == {"ops:read", "ops:disable_trading"}
+    # trading:* belongs to the real engine's trading routes (atlas_api/trading.py), not to these.
+    assert set(ENGINE_SCOPES) == {"ops:read", "ops:disable_trading", "trading:read", "trading:demo"}
     # The only write scope stops trading; nothing can enable, flatten, clear a kill or change a limit.
     for route in OPS_ROUTES:
         assert not any(w in route for w in ("enable_trading", "flatten", "kill", "risk", "limit", "order"))

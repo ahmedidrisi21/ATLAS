@@ -17,12 +17,18 @@ EXPECTED_TOOLS = {
     "atlas-journal": {"query_trades", "mfe_mae", "loss_clusters"},
     "atlas-performance": {"performance_summary"},
     "atlas-operations": {"system_status", "health_state", "reconciliation_report", "disable_trading"},
+    "atlas-trading": {"get_live_market", "submit_trade_intent", "get_intent_status", "list_my_positions",
+                      "close_my_position", "tighten_stop", "my_track_record"},
 }
 
 # PRD §6: none of these exists on any MCP server. flatten_all belongs to the
-# operator-only atlas-emergency server; submit_trade_intent to atlas-trading (T7).
+# operator-only atlas-emergency server. atlas-trading closes only the agent's own
+# positions (close_my_position), never any position.
 FORBIDDEN = {"send_raw_order", "modify_risk", "enable_trading", "access_holdout", "flatten_all",
-             "submit_trade_intent", "set_risk", "close_position", "place_order", "clear_kill", "reenable_trading"}
+             "set_risk", "close_position", "place_order", "clear_kill", "reenable_trading", "set_volume",
+             "set_lots", "enable_live", "go_live"}
+# Agent trading (demo only) exists on atlas-trading only.
+ONLY_ON_TRADING = {"submit_trade_intent", "close_my_position", "tighten_stop"}
 # The one safe write (PRD §6, §23) exists on atlas-operations only.
 ONLY_ON_OPERATIONS = {"disable_trading"}
 
@@ -56,6 +62,8 @@ def test_tool_surface(name):
         assert tool.description
         if name != "atlas-operations":
             assert tool_name not in ONLY_ON_OPERATIONS
+        if name != "atlas-trading":
+            assert tool_name not in ONLY_ON_TRADING
 
 
 def test_no_server_has_a_forbidden_tool():
@@ -74,7 +82,9 @@ def test_servers_only_forward_to_their_own_routes():
         for tool, t in tools.items():
             required = t.input_schema.get("required", [])
             args = {k: {"symbol": "EURUSD", "symbols": ["EURUSD"], "timeframe": "H1", "window": "dev",
-                        "strategy": "trend_pullback", "run_id": "r", "reason": "drill reason text"}[k]
+                        "strategy": "trend_pullback", "run_id": "r", "reason": "drill reason text",
+                        "intent_id": "i-0001", "direction": "buy", "stop": 1.1, "target": 1.2, "confidence": 0.5,
+                        "thesis": "x" * 40, "ticket": 1, "new_stop": 1.15}[k]
                     for k in required}
             err, text = _run(_call(server, tool, args))
             assert not err, (tool, text)

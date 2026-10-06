@@ -317,6 +317,40 @@ Access subscription and API key?" Until that is answered yes, the fallback is
 the NinjaTrader 8 desktop bridge, which works with the normal login but has to
 be written in C# and run on Windows.
 
+## MCP servers from NinjaTrader and FundedNext (checked 2026-10-06)
+
+Both firms now run MCP servers. Neither changes the rule that only the engine
+places orders; both are useful.
+
+| | NinjaTrader MCP | FundedNext MCP |
+| --- | --- | --- |
+| URL | `https://mcp-demo.tradovateapi.com/mcp` (Demo), `https://mcp-live.tradovateapi.com/mcp` (Live) | `https://mcp.fundednext.com` |
+| Status | Beta, "not yet generally available"; hostnames and tools may change (VERIFIED, docs.ninjatrader.com/mcp) | Live since 2026-08 (VERIFIED, helpfutures.fundednext.com article 17230016, updated 2026-09-30) |
+| Sign-in | OAuth 2.1 with the NinjaTrader login in a desktop browser; access token ~80 min, rotating refresh token ~26 h; session ends after ~1 h idle | OAuth 2.0 plus a one-time token from the FundedNext dashboard |
+| Can trade? | Yes: `place_order` (with OCO/OSO brackets as price offsets), `modify_order`, `cancel_order`, `close_position`, `update_risk_settings` | No. Strictly read-only |
+| Reads | `my_portfolio`, `market_snapshot`, `market_history`, `dom_snapshot`, `search_contracts`, `estimate_order`, `economic_calendar`, order / fill / position / cash history, `performance_summary`, `risk_settings` | Balances, trade history, drawdown room, consistency-rule status, breaches, payout eligibility, across CFD and futures (Tradovate) accounts |
+| Extra safety | Per-connection limits set on the consent screen: max exposure, max traded volume per session, and a product/contract allowlist, enforced by NinjaTrader on every opening order | n/a |
+| API Access subscription / $1,000 live account | Not mentioned in the MCP docs (the REST API needs them). Whether a FundedNext login can authorize it: UNVERIFIED | n/a |
+
+How ATLAS could use them, within AGENTS.md:
+
+- **FundedNext MCP, read-only, for the reporting personas** (atlas-performance,
+  atlas-operations): a second opinion from the firm itself on drawdown room and
+  rule breaches, to compare against ATLAS' own risk lines. NOT IMPLEMENTED.
+- **NinjaTrader MCP read tools for atlas-market** (`economic_calendar`,
+  `market_snapshot`, `market_history`): the economic calendar the Hermes trader
+  was waiting for. NOT IMPLEMENTED. Its write tools must never be given to a
+  Hermes profile: that would be an order path around the engine.
+- **NinjaTrader MCP as the engine's transport** (a second `FuturesVenue` that
+  calls the MCP tools instead of REST): possible, and it may avoid the API
+  subscription. Against it: beta, no client order ID on `place_order` (a
+  `TrackingTimeout` leaves the outcome unknown), bracket legs as offsets,
+  hourly idle sessions. NOT IMPLEMENTED; worth it only if the REST API is
+  closed to FundedNext accounts and the MCP route is open.
+- **Its connection risk limits** (exposure cap, MES-only allowlist) are a
+  broker-side backstop independent of ATLAS, whichever route places orders,
+  if the engine's connection is authorized through the same OAuth.
+
 ## Order lifecycle and brackets
 
 What `FuturesExecutionAdapter` does with an ALLOWed trade, step by step, each

@@ -78,6 +78,7 @@ class FuturesContract:
     year: int
     last_trade: dt.datetime | None  # UTC; None when the broker did not say (then nothing trades)
     first_notice: dt.date | None = None  # physically delivered products only
+    front: bool | None = None  # the platform's front-month flag (NinjaTrader: ContractMaturity.isFront)
 
     @property
     def research_symbol(self) -> str:
@@ -103,7 +104,7 @@ class FuturesContract:
     def to_dict(self) -> dict:
         return {"symbol": self.symbol, "root": self.root, "month": self.month, "year": self.year,
                 "last_trade": self.last_trade.isoformat() if self.last_trade else None,
-                "first_notice": self.first_notice.isoformat() if self.first_notice else None}
+                "first_notice": self.first_notice.isoformat() if self.first_notice else None, "front": self.front}
 
 
 @lru_cache(maxsize=1)

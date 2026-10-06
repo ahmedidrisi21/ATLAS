@@ -287,7 +287,13 @@ class DecisionPipeline:
         return (spec.commission_per_lot / price_risk if price_risk > 0 else float("inf")) + self.settings.extra_cost_r
 
     def _model(self, i: TradeIntent, ctx: Context, d: EngineDecision) -> bool:
-        name = "agent_stated" if i.source == "agent" else self.models.model_for(i.strategy)
+        # An agent's idea is scored by its own stated probability (demo only), unless the operator assigned its
+        # strategy to a model (e.g. hermes: jev), which then scores it like any rule signal.
+        assigned = i.strategy in self.models.assignment
+        name = "agent_stated" if i.source == "agent" and not assigned else self.models.model_for(i.strategy)
+        if i.source == "agent" and assigned and ctx.demo_account is not True:
+            # AGENTS.md: agent trades are demo only, whichever model scores them.
+            return self._fail(d, "model", ["agent_trade_needs_demo_account"], model=self.models.model_for(i.strategy))
         if name == "agent_stated" and ctx.demo_account is not True:
             return self._fail(d, "model", ["stated_probability_needs_demo_account"], model=name)
         model = self.models.get(name)

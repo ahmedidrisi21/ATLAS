@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "atlas"
 version = "0.1.0"
-description = "ATLAS trading core: market data, shared features, setups, the T0 research backtester, T1 exit research, the T2 selection layer, the risk engine and prop rules, the trading engine with its futures (Tradovate) and MT5 adapters, the research API and MCP servers, and the operations plugins"
+description = "ATLAS trading core: market data, shared features, setups, the T0 research backtester, T1 exit research, the T2 selection layer, the risk engine and prop rules, the trading engine with its futures (NinjaTrader) and MT5 adapters, the research API and MCP servers, and the operations plugins"
 requires-python = ">=3.11"
 dependencies = [
     "numpy>=1.26",
@@ -20,8 +20,8 @@ dependencies = [
 mcp = ["mcp==2.0.0"]
 # T2 gradient-boosted selection baseline (research only; the engine's calibration and EV gate need numpy only).
 selection = ["scikit-learn>=1.4"]
-# Tradovate quotes come over a WebSocket (atlas_engine.adapters.tradovate.quotes); engine host only.
-tradovate = ["websocket-client>=1.7"]
+# NinjaTrader (Tradovate API) quotes come over a WebSocket (atlas_engine.adapters.ninjatrader.quotes); engine host only.
+ninjatrader = ["websocket-client>=1.7"]
 dev = ["pytest>=8", "mcp==2.0.0", "scikit-learn>=1.4"]
 
 [project.scripts]

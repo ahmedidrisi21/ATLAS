@@ -238,7 +238,8 @@ class RiskEngine:
         trade = PolicyTrade(prop.symbol, prop.direction, prop.entry, prop.stop, prop.target, spec.tick_size)
         reasons += self.policy.entry_reasons(trade, pctx)
         cap = self.policy.max_contracts(prop.symbol, pctx)
-        checks["prop"] = {"policy": self.policy.name, "max_volume": cap}
+        checks["prop"] = {"policy": self.policy.name, "version": getattr(self.policy, "version", None),
+                          "max_volume": cap}
         if cap is not None and cap + _EPS < spec.volume_min:
             reasons.append("prop_contract_limit")
 

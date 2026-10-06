@@ -16,13 +16,20 @@ from the platform's orders, fills and net positions:
     fills                                     -> BrokerDeals (in / out, sl / tp)
 
 ``FuturesVenue`` does that rebuild and the contract checks. A platform
-subclass (``atlas_engine.adapters.tradovate.TradovateAdapter``) supplies the
+subclass (``atlas_engine.adapters.ninjatrader.NinjaTraderAdapter``) supplies the
 primitives: its orders, fills and net positions in the generic vocabulary below,
 and the order commands. Platform types never leave the subclass. Only the
-execution adapter (``atlas_engine.execution.futures``) sends orders.
+execution adapter (``atlas_engine.execution.futures``) sends orders, and every
+new order is a broker-neutral ``OrderRequest`` (``atlas_engine.adapters.orders``)
+that ``submit`` checks before the platform sees it.
 
 Generic order vocabulary: side +1 BUY / -1 SELL; type MARKET, LIMIT, STOP,
 STOP_LIMIT; status working, filled, cancelled, rejected.
+
+Client order IDs: the entry carries the bracket's ID (``ATL-…``, from the
+decision ID); its stop and target ``<id>-S`` and ``<id>-T``; a re-placed leg
+``<id>-S2``, ``<id>-T2``…; an exit ``<id>-X1``…. The platform stores them on its
+orders, so after a lost answer or a restart ATLAS finds its own orders by ID.
 """
 
 from __future__ import annotations
@@ -36,8 +43,7 @@ from pathlib import Path
 from atlas_engine.adapters.broker import AccountInfo, BrokerDeal, BrokerPosition, BrokerUnavailable, SymbolRules, Tick
 from atlas_engine.futures import FuturesContract, check_against_broker, product
 
-ORDER_TYPES = ("MARKET", "LIMIT", "STOP", "STOP_LIMIT")
-SIDES = {1: "BUY", -1: "SELL"}
+from .orders import ORDER_TYPES, SIDE_NAMES as SIDES, OrderRequest  # noqa: F401 - ORDER_TYPES re-exported
 FINAL = ("filled", "cancelled", "rejected")
 
 
@@ -56,6 +62,9 @@ class VenueOrder:
     price: float | None = None
     stop_price: float | None = None
     time: dt.datetime | None = None
+    client_id: str = ""  # the client order ID the platform stored, when it reports one
+    oco_id: int | None = None  # orders sharing an OCO id cancel each other
+    parent_id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -72,7 +81,7 @@ class VenueFill:
 @dataclass(frozen=True)
 class VenueAck:
     ok: bool
-    ids: dict = field(default_factory=dict)  # role -> order id: entry / stop / target, or order
+    ids: dict = field(default_factory=dict)  # role -> order id: entry / stop / target, or order, or stop / target
     reason: str = ""
     unknown: bool = False  # no answer: the command may or may not have reached the platform
 
@@ -95,14 +104,15 @@ class Bracket:
     stop_id: int | None = None
     target_id: int | None = None
     exit_ids: list = field(default_factory=list)
+    replaced: int = 0  # how many times the legs were re-placed (numbers their client order IDs)
 
     def order_ids(self) -> list[int]:
         return [i for i in (self.entry_id, self.stop_id, self.target_id, *self.exit_ids) if i is not None]
 
 
 class BracketLedger:
-    """Durable ``client_id -> Bracket``. The platform's order list does not carry the client order ID back,
-    so without this file a restart could not tell ATLAS' orders from the operator's."""
+    """Durable ``client_id -> Bracket``: what ATLAS sent, written before it is sent. With the client order IDs
+    the platform stores, a restart tells ATLAS' orders from the operator's and knows each order's role."""
 
     def __init__(self, path: str | Path | None):
         self.path = Path(path) if path else None
@@ -166,26 +176,101 @@ class FuturesVenue:
     def _quote(self, contract: str) -> Tick: raise NotImplementedError
     def refresh(self) -> None: """Drop cached reads, after a write."""
 
-    # Order commands (called by atlas_engine.execution.futures only).
-    def place_bracket(self, contract: str, side: int, qty: float, stop: float, target: float,
-                      client_id: str) -> VenueAck: raise NotImplementedError
-    def place_order(self, contract: str, side: int, qty: float, type: str, client_id: str, price: float | None = None,
-                    stop_price: float | None = None) -> VenueAck: raise NotImplementedError
+    # Order commands (called by atlas_engine.execution.futures only). ``_send`` gets a checked OrderRequest:
+    # a bracket (market entry with stop_loss and take_profit, ids entry / stop / target) or one order (id order).
+    # ``_send_oco`` places a stop and a target that cancel each other (ids stop / target).
+    def _send(self, req: OrderRequest) -> VenueAck: raise NotImplementedError
+    def _send_oco(self, stop: OrderRequest, target: OrderRequest) -> VenueAck: raise NotImplementedError
     def cancel(self, order_id: int) -> VenueAck: raise NotImplementedError
     def modify(self, order_id: int, qty: float, type: str, price: float | None = None,
                stop_price: float | None = None) -> VenueAck: raise NotImplementedError
 
+    def _atlas_net(self, contract: str) -> float:
+        """ATLAS' own signed open quantity on a contract (the account nets it with anyone else's)."""
+        orders, fills = self._book()
+        return sum(b.direction * self._bracket_state(b, orders, fills)[0]
+                   for b in self.ledger.active() if b.contract == contract and b.entry_id is not None)
+
+    def _reduce_problem(self, req: OrderRequest) -> str | None:
+        """Reduce-only is checked against ATLAS' own position: an exit or leg may never be larger than what
+        ATLAS holds, nor on the same side. (No futures platform ATLAS uses has a reduce-only flag.)"""
+        net = self._atlas_net(req.symbol)
+        if abs(net) < 1e-9 or (net > 0) == (req.direction > 0) or req.quantity > abs(net) + 1e-9:
+            return "reduce_only_would_open_or_grow_a_position"
+        return None
+
+    def submit(self, req: OrderRequest) -> VenueAck:
+        """Send one checked order. A malformed order, or a reduce-only order that would open or grow a
+        position, never reaches the platform."""
+        bad = req.problems()
+        if not bad and req.reduce_only:
+            bad = [p for p in (self._reduce_problem(req),) if p]
+        if bad:
+            return VenueAck(False, reason="invalid_order: " + ",".join(bad))
+        return self._send(req)
+
+    def submit_oco(self, stop: OrderRequest, target: OrderRequest) -> VenueAck:
+        """A protective stop and target linked one-cancels-other; both must be reduce-only, opposite the position."""
+        bad = stop.problems() + target.problems()
+        if not (stop.reduce_only and target.reduce_only) or stop.symbol != target.symbol or stop.side != target.side \
+                or stop.quantity != target.quantity or stop.order_type != "STOP" or target.order_type != "LIMIT":
+            bad.append("oco_legs_mismatched")
+        if not bad:
+            bad = [p for p in (self._reduce_problem(stop),) if p]
+        if bad:
+            return VenueAck(False, reason="invalid_order: " + ",".join(bad))
+        return self._send_oco(stop, target)
+
+    def protection_problems(self, b: Bracket) -> list[str]:
+        """Why a live bracket's position is not fully protected; empty when it is.
+
+        Protected means: a working STOP and a working LIMIT on the opposite side, each for exactly the open
+        quantity, at the recorded prices, linked one-cancels-other (so a filled stop cannot leave the target
+        working to open a new position)."""
+        orders, fills = self._book()
+        open_qty = self._bracket_state(b, orders, fills)[0]
+        if open_qty <= 1e-9:
+            return []
+        out = []
+        legs = {}
+        for role, kind, px in (("stop", "STOP", b.stop), ("target", "LIMIT", b.target)):
+            o = orders.get(getattr(b, f"{role}_id")) if getattr(b, f"{role}_id") else None
+            if o is None or o.status != "working":
+                out.append(f"{role}_missing")
+                continue
+            legs[role] = o
+            if o.type != kind or o.side != -b.direction:
+                out.append(f"{role}_wrong_type_or_side")
+            if abs(o.qty - open_qty) > 1e-9:
+                out.append(f"{role}_qty_{o.qty:g}_vs_position_{open_qty:g}")
+            if abs(((o.stop_price if kind == "STOP" else o.price) or 0.0) - px) > 1e-9:
+                out.append(f"{role}_price_differs")
+        if len(legs) == 2 and (legs["stop"].oco_id is None or legs["stop"].oco_id != legs["target"].oco_id):
+            out.append("stop_and_target_not_oco_linked")
+        return out
+
     def adopt(self, b: Bracket) -> bool:
         """After a send with no answer: find the bracket's orders on the platform and record them.
 
-        Matches by contract, side, quantity, type and price among orders no bracket owns, placed since the
-        send. True when exactly one entry matched (its stop and target are taken when found too). False when
+        First by client order ID (the platform stores it on each order). When the platform reports none,
+        by contract, side, quantity, type and price among orders no bracket owns, placed since the send.
+        True when exactly one entry matched (its stop and target are taken when found too). False when
         none did: the bracket is marked failed, nothing reached the platform. An ambiguous match stays
         ``sending``; whatever it filled shows as a foreign position, and reconciliation HALTs."""
         self.refresh()
+        mine = [o for o in self._orders() if o.client_id == b.client_id]
+        if len(mine) == 1:
+            legs = {o.client_id: o for o in self._orders() if o.client_id in (f"{b.client_id}-S", f"{b.client_id}-T")}
+            b.entry_id = mine[0].id
+            b.stop_id = legs[f"{b.client_id}-S"].id if f"{b.client_id}-S" in legs else None
+            b.target_id = legs[f"{b.client_id}-T"].id if f"{b.client_id}-T" in legs else None
+            self.ledger.save()
+            return True
+        if len(mine) > 1:
+            return False  # the same ID twice: never guess; reconciliation sees the result
         owned = {i for x in self.ledger.items.values() for i in x.order_ids()}
         since = dt.datetime.fromisoformat(b.sent_at)
-        free = [o for o in self._orders() if o.id not in owned and o.contract == b.contract
+        free = [o for o in self._orders() if o.id not in owned and o.contract == b.contract and not o.client_id
                 and (o.time is None or o.time >= since)]
         entries = [o for o in free if o.side == b.direction and o.type == "MARKET" and abs(o.qty - b.qty) < 1e-9]
         if len(entries) != 1:
@@ -313,12 +398,24 @@ class FuturesVenue:
         for o in self._orders():
             if o.status != "working":
                 continue
-            b = self.ledger.owner(o.id)
+            b = self.ledger.owner(o.id) or self._owner_by_client_id(o)
             role = None if b is None else {b.entry_id: "entry", b.stop_id: "stop", b.target_id: "target"}.get(o.id, "exit")
             out.append({"ticket": o.id, "symbol": self.root_of(o.contract), "magic": b.magic if b else 0,
                         "comment": b.client_id if b else "", "role": role, "type": o.type, "side": SIDES[o.side],
                         "volume": o.qty, "price": o.price, "stop_price": o.stop_price})
         return out
+
+    def _owner_by_client_id(self, o: VenueOrder) -> Bracket | None:
+        """An ATLAS order the ledger lost track of (a crash between the send and the save) is still ATLAS'."""
+        if not o.client_id.startswith("ATL-"):
+            return None
+        return self.ledger.get(o.client_id[:20])  # ATL- and 16 characters (executor.client_order_id)
+
+    def foreign_working_orders(self) -> list[VenueOrder]:
+        """Working orders on a contract ATLAS trades that ATLAS did not place (another app, a person)."""
+        traded = set(self.pins.values())
+        return [o for o in self._orders() if o.status == "working" and o.contract in traded
+                and self.ledger.owner(o.id) is None and not o.client_id.startswith("ATL-")]
 
     def recent_deals(self, now: dt.datetime) -> list[BrokerDeal]:
         orders, fills = self._book()

@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime as dt
 
 import pytest
+from pathlib import Path
 
 from atlas_engine.journal.audit import reconstruct
 
@@ -139,7 +140,7 @@ def test_an_intent_cannot_carry_a_broker_order_command(field):
     assert e.value.code == "forbidden_field"
 
 
-def test_the_engine_host_builds_tradovate_only_for_a_tradovate_config(tmp_path):
+def test_the_engine_host_builds_ninjatrader_only_for_a_ninjatrader_config(tmp_path):
     import argparse
 
     from atlas_api import engine_cli
@@ -149,18 +150,33 @@ def test_the_engine_host_builds_tradovate_only_for_a_tradovate_config(tmp_path):
                               allow_writable_config=True)
     with pytest.raises(SystemExit, match="execution.platform: mt5"):
         engine_cli.build_engine(args)
-    args.broker = "fake-tradovate"
+    args.broker = "fake-ninjatrader"
     eng = engine_cli.build_engine(args)
-    assert type(eng.execution).__name__ == "FuturesExecutionAdapter" and eng.execution.platform == "tradovate"
+    assert type(eng.execution).__name__ == "FuturesExecutionAdapter" and eng.execution.platform == "ninjatrader"
+    assert eng.source == "engine:fake-ninjatrader"
+    eng.journal.close()
+    args.broker = "fake-tradovate"  # the same API under its other name: the same adapter, not a second one
+    eng = engine_cli.build_engine(args)
+    assert type(eng.broker).__name__ == "NinjaTraderAdapter"
     eng.journal.close()
 
 
-def test_a_live_tradovate_run_needs_credentials_from_the_environment(tmp_path):
-    from atlas_api.engine_cli import tradovate_venue
+def test_tradovate_is_an_alias_of_ninjatrader_in_the_config(tmp_path):
+    from atlas_engine.execution import load_execution_settings
+    from atlas_engine.execution.broker_api import PLATFORMS
+
+    (tmp_path / "atlas.yaml").write_text((Path(__file__).resolve().parents[2] / "deploy" / "futures-config" / "atlas.yaml")
+                                         .read_text().replace("platform: ninjatrader", "platform: tradovate"))
+    assert load_execution_settings(tmp_path).platform == "ninjatrader"
+    assert set(PLATFORMS) == {"mt5", "ninjatrader"}  # one futures adapter
+
+
+def test_a_live_ninjatrader_run_needs_credentials_from_the_environment(tmp_path):
+    from atlas_api.engine_cli import ninjatrader_venue
     from atlas_engine.config import load_engine_config
     from atlas_engine.execution import load_execution_settings
     from futureshelp import FUTURES_CONFIG
 
     cfg, s = load_engine_config(FUTURES_CONFIG), load_execution_settings(FUTURES_CONFIG)
-    with pytest.raises(SystemExit, match="ATLAS_TRADOVATE_PASSWORD"):
-        tradovate_venue("tradovate", cfg, s, tmp_path, env={})
+    with pytest.raises(SystemExit, match="ATLAS_NINJATRADER_PASSWORD"):
+        ninjatrader_venue("ninjatrader", cfg, s, tmp_path, env={})

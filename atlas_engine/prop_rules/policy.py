@@ -8,6 +8,7 @@ reads Hermes memory or asks a model.
 
 Per-trade rules it applies, each only when the rule file sets it:
 
+    prop_instrument_not_allowed   a product the firm's rule file does not list (futures.products)
     prop_news_window              opening inside a restricted news window
     prop_outside_trading_hours    too close to the firm's daily flat-by time, or before it reopens
     prop_correlated_hedge         opposite side of an open position in the same asset group
@@ -18,13 +19,20 @@ Per-trade rules it applies, each only when the rule file sets it:
 ``flatten_due`` says when open positions must be closed (the firm's flat-by
 time, less ATLAS' margin), so the engine closes them itself rather than leaving
 it to the firm's automatic liquidation.
+
+``version`` identifies the exact rules a decision was checked against: the
+date the file was checked and a hash of the parsed rules, journaled with every
+prop stage (``checks["prop"]["version"]``). Any edit to the rule file, or to the
+ATLAS margins below, changes it.
 """
 
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
+import json
 import math
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Protocol
 from zoneinfo import ZoneInfo
 
@@ -57,6 +65,7 @@ class PolicyContext:
 
 class PropPolicy(Protocol):
     name: str
+    version: str
 
     def entry_reasons(self, trade: PolicyTrade, ctx: PolicyContext) -> list[str]: ...
     def max_contracts(self, symbol: str, ctx: PolicyContext) -> float | None: ...
@@ -68,6 +77,15 @@ def _mini_equivalent(symbol: str) -> float:
     from atlas_engine.futures.contracts import product  # futures catalogue
 
     return product(symbol).mini_equivalent
+
+
+def _root(symbol: str) -> str:
+    from atlas_engine.futures.contracts import product
+
+    try:
+        return product(symbol).root
+    except Exception:  # noqa: BLE001 - not in the futures catalogue
+        return symbol.upper()
 
 
 def _group(symbol: str) -> str:
@@ -84,6 +102,9 @@ class StandardPropPolicy:
         self.entry_cutoff = dt.timedelta(minutes=entry_cutoff_min)
         self.flatten_lead = dt.timedelta(minutes=flatten_lead_min)
         self.consistency = consistency(rules.consistency_rule)
+        blob = json.dumps({"rules": asdict(rules), "entry_cutoff_min": entry_cutoff_min,
+                           "flatten_lead_min": flatten_lead_min}, sort_keys=True, default=str)
+        self.version = f"{rules.checked}:{hashlib.sha256(blob.encode()).hexdigest()[:12]}"
 
     # -- trading hours ------------------------------------------------------------
 
@@ -109,6 +130,8 @@ class StandardPropPolicy:
         f = r.futures
         if f is None:
             return out
+        if f.products is not None and _root(trade.symbol) not in f.products:
+            out.append("prop_instrument_not_allowed")
         if self._window(ctx.now, self.entry_cutoff):
             out.append("prop_outside_trading_hours")
         if not f.hedging_correlated:

@@ -18,11 +18,12 @@ Hermes, the MCP servers and the API never import this module or an adapter:
 
 Two are built. ``FuturesExecutionAdapter`` (``execution.futures``) is the
 futures-first path: generic bracket execution over a ``FuturesVenue``, with
-Tradovate (``atlas_engine.adapters.tradovate``) the first platform behind it.
+NinjaTrader (``atlas_engine.adapters.ninjatrader``, NinjaTrader's official REST
+and WebSocket API, which is the Tradovate API) the primary platform behind it.
 ``MT5ExecutionAdapter`` is the MetaTrader 5 terminal on a Windows host, through
 ``atlas_engine.adapters.mt5`` (the only code that calls the ``MetaTrader5``
 package) and the T4 ``Executor``; it stays for the forex work and its tests.
-Another platform (Rithmic, for one) is a new ``FuturesVenue`` subclass and a
+Another platform (Rithmic, for one; not built) is a new ``FuturesVenue`` subclass and a
 line in ``PLATFORMS``; nothing above it changes. Credentials live only in the
 adapter's host environment, never in this repo or in anything an agent can
 read (§30).
@@ -123,7 +124,7 @@ class MT5ExecutionAdapter:
 
 
 PLATFORMS["mt5"] = MT5ExecutionAdapter
-PLATFORMS["tradovate"] = FuturesExecutionAdapter
+PLATFORMS["ninjatrader"] = FuturesExecutionAdapter  # primary futures platform (docs/futures.md)
 
 
 def execution_adapter(platform: str, broker, settings: ExecutionSettings) -> ExecutionBroker:

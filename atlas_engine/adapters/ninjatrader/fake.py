@@ -1,6 +1,6 @@
-"""A stand-in for Tradovate's REST API, for tests and dry runs (``atlas-engine --broker fake-tradovate``).
+"""A stand-in for NinjaTrader's (Tradovate's) REST API, for tests and dry runs (``atlas-engine --broker fake-ninjatrader``).
 
-It answers the endpoints ``TradovateClient`` calls with Tradovate-shaped JSON
+It answers the endpoints ``NinjaTraderClient`` calls with Tradovate-shaped JSON
 and keeps a small, honest exchange: market orders fill at the quote, a
 bracket's stop and limit work once the entry fills and cancel each other, and
 ``set_quote`` fills stops and limits the price reaches. Fault switches mimic
@@ -20,7 +20,7 @@ PRODUCTS = {"MES": (0.25, 5.0), "ES": (0.25, 50.0), "MNQ": (0.25, 2.0), "NQ": (0
             "GC": (0.1, 100.0), "MYM": (1.0, 0.5), "YM": (1.0, 5.0), "MCL": (0.01, 100.0), "CL": (0.01, 1000.0)}
 
 
-class FakeTradovate:
+class FakeNinjaTrader:
     def __init__(self, contracts: dict[str, dt.datetime] | None = None, now=None, balance: float = 50_000.0,
                  account_name: str = "DEMO123", other_accounts: int = 0):
         self.now = now or (lambda: dt.datetime.now(dt.timezone.utc))
@@ -47,6 +47,9 @@ class FakeTradovate:
         self.drop_next_before_send = False  # drop the next order command without applying it
         self.penalty_next = 0.0  # p-time for the next call
         self.fill_market = True
+        self.unlinked_brackets = False  # bracket legs come back without a shared ocoId
+        self.forget_client_ids = False  # the order list omits clOrdId
+        self.malformed: set[str] = set()  # GET paths that answer with a broken row until removed
         self.drop_stop_after_fill = False
         self.expire_token = False
 
@@ -59,7 +62,8 @@ class FakeTradovate:
         self.products[pid] = {"id": pid, "name": root, "tickSize": tick, "valuePerPoint": vpp, "currencyId": 1}
         mid = next(self.ids)
         self.maturities[mid] = {"id": mid, "productId": pid, "expirationDate": last_trade.isoformat().replace("+00:00", "Z"),
-                                "firstIntentDate": first_intent.isoformat().replace("+00:00", "Z") if first_intent else None}
+                                "firstIntentDate": first_intent.isoformat().replace("+00:00", "Z") if first_intent else None,
+                                "isFront": True}
         cid = next(self.ids)
         self.contracts[cid] = {"id": cid, "name": code, "contractMaturityId": mid}
         return cid
@@ -97,7 +101,8 @@ class FakeTradovate:
         oid = next(self.ids)
         contract = next(c for c in self.contracts.values() if c["name"] == body["symbol"])
         o = {"id": oid, "accountId": account, "contractId": contract["id"], "timestamp": self._ts(),
-             "action": body["action"], "ordStatus": status, "parentId": parent, "ocoId": None}
+             "action": body["action"], "ordStatus": status, "parentId": parent, "ocoId": None,
+             "clOrdId": body.get("clOrdId")}
         self.orders[oid] = o
         self.versions[oid] = {"id": next(self.ids), "orderId": oid, "orderQty": body.get("orderQty", 0),
                               "orderType": body["orderType"], "price": body.get("price"), "stopPrice": body.get("stopPrice"),
@@ -182,7 +187,11 @@ class FakeTradovate:
             return self.maturities[int(p["id"])]
         if path == "/product/item":
             return self.products[int(p["id"])]
+        if path in self.malformed:
+            return [{"id": "not-a-number"}]
         if path == "/order/list":
+            if self.forget_client_ids:
+                return [{k: v for k, v in o.items() if k != "clOrdId"} for o in self.orders.values()]
             return list(self.orders.values())
         if path == "/orderVersion/list":
             return list(self.versions.values())
@@ -198,7 +207,7 @@ class FakeTradovate:
                     out.append({"accountId": 1, "contractId": c["id"], "netPos": tot,
                                 "netPrice": ((avg * net + fpx * fnet) / tot) if tot else 0.0})
             return out
-        raise AssertionError(f"fake Tradovate: no GET {path}")
+        raise AssertionError(f"fake NinjaTrader API: no GET {path}")
 
     def _post(self, path: str, b: dict):
         if path == "/cashBalance/getcashbalancesnapshot":
@@ -226,12 +235,18 @@ class FakeTradovate:
                     if key in b:
                         leg = self._new_order({**b[key], "symbol": b["symbol"], "orderQty": b["orderQty"]},
                                               status="Suspended", parent=entry["id"])
-                        leg["ocoId"] = oco if "bracket2" in b else None
+                        leg["ocoId"] = oco if "bracket2" in b and not self.unlinked_brackets else None
                         out[n] = leg["id"]
             if b["orderType"] == "Market" and self.fill_market:
                 bid, ask = self.quotes[b["symbol"]]
                 self._fill(entry, ask if b["action"] == "Buy" else bid)
             return out
+        if path == "/order/placeoco":
+            assert b.get("isAutomated") is True, "automated orders must say so"
+            first = self._new_order(b)
+            other = self._new_order({**b["other"], "symbol": b["symbol"], "orderQty": b["orderQty"]})
+            first["ocoId"] = other["ocoId"] = next(self.ids)
+            return {"failureReason": "Success", "orderId": first["id"], "ocoId": other["id"]}
         if path == "/order/cancelorder":
             o = self.orders.get(b["orderId"])
             if o is None or o["ordStatus"] not in ("Working", "Suspended"):
@@ -251,7 +266,7 @@ class FakeTradovate:
                     v[k] = b[k]
             self.versions[o["id"]] = v
             return {"failureReason": "Success", "commandId": next(self.ids)}
-        raise AssertionError(f"fake Tradovate: no POST {path}")
+        raise AssertionError(f"fake NinjaTrader API: no POST {path}")
 
 
 START_PRICES = {"MES": 5000.0, "ES": 5000.0, "MNQ": 18000.0, "NQ": 18000.0, "MYM": 40000.0, "YM": 40000.0,
@@ -261,7 +276,7 @@ START_PRICES = {"MES": 5000.0, "ES": 5000.0, "MNQ": 18000.0, "NQ": 18000.0, "MYM
 class FakeQuoteBook(QuoteBook):
     """Live-looking quotes for drills: each read moves the price by up to a tick and stamps the current time."""
 
-    def __init__(self, fake: FakeTradovate, seed: int = 7):
+    def __init__(self, fake: FakeNinjaTrader, seed: int = 7):
         super().__init__()
         self.fake, self.rng = fake, random.Random(seed)
         self.mid: dict[str, float] = {}

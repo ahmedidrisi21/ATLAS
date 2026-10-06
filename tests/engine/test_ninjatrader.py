@@ -8,8 +8,8 @@ import datetime as dt
 import pytest
 
 from atlas_engine.adapters.futures_venue import ContractMismatch, foreign_ticket
-from atlas_engine.adapters.tradovate import (
-    Credentials, FakeTradovate, QuoteBook, RateLimited, TradovateClient, TradovateError, parse_frame,
+from atlas_engine.adapters.ninjatrader import (
+    Credentials, FakeNinjaTrader, QuoteBook, RateLimited, NinjaTraderClient, NinjaTraderError, parse_frame,
 )
 from atlas_engine.execution import EntryOrder, ExecutionSettings, FuturesExecutionAdapter
 from atlas_engine.positions.book import ManagedPosition, PositionBook
@@ -17,7 +17,7 @@ from atlas_engine.positions.book import ManagedPosition, PositionBook
 from futureshelp import CREDS, F0, MESZ6_LAST_TRADE, venue
 from t4help import Clock
 
-SETTINGS = ExecutionSettings(platform="tradovate", contracts={"MES": "MESZ6"})
+SETTINGS = ExecutionSettings(platform="ninjatrader", contracts={"MES": "MESZ6"})
 
 
 @pytest.fixture
@@ -133,23 +133,23 @@ def test_an_unfilled_market_entry_is_cancelled_with_its_legs(t):
 def test_a_fill_whose_stop_vanished_gets_a_new_stop(t):
     t.fake.drop_stop_after_fill = True
     r = t.ex.submit_order(order(), F0)
-    assert r.status == "filled" and "stop re-placed" in r.reason and r.sl == 4990.0
+    assert r.status == "filled" and "protection re-placed after fill: stop_missing" in r.reason and r.sl == 4990.0
     assert any(o["role"] == "stop" for o in t.ex.get_orders())
+    (b,) = t.venue.ledger.active()
+    assert t.venue.protection_problems(b) == []  # the new pair is linked one-cancels-other
+    assert {t.fake.orders[b.stop_id]["clOrdId"], t.fake.orders[b.target_id]["clOrdId"]} == {b.client_id + "-S2",
+                                                                                            b.client_id + "-T2"}
 
 
 def test_a_fill_left_unprotected_is_closed(t):
+    from atlas_engine.adapters.futures_venue import VenueAck
+
     t.fake.drop_stop_after_fill = True
-    real = t.venue.place_order
-
-    def refuse_stops(contract, side, qty, type, client_id, price=None, stop_price=None):
-        if type == "STOP":
-            from atlas_engine.adapters.futures_venue import VenueAck
-            return VenueAck(False, reason="refused")
-        return real(contract, side, qty, type, client_id, price, stop_price)
-
-    t.venue.place_order = refuse_stops
+    t.venue._send_oco = lambda stop, target: VenueAck(False, reason="refused")
     r = t.ex.submit_order(order(), F0)
     assert r.status == "unprotected_closed" and t.ex.get_positions() == []
+    events = [e["event"] for e in t.ex.drain_events()]
+    assert "protection_failed" in events and "position_closed" in events and "position_opened" not in events
 
 
 # ---------------------------------------------------------------- managing and closing
@@ -216,10 +216,13 @@ def test_reconcile_restores_a_missing_stop_and_housekeeping_clears_stale_legs(t)
     assert kinds == ["stop_missing"]
     assert t.ex.modify_position(t.ex.get_positions()[0], 4990.0, 5020.0).status == "filled"
     assert t.ex.reconcile(book, {"MES": 0.25}) == []
-    # The re-placed stop is not linked to the target: once the target fills, the stop must not stay working.
+    # The stop and target were re-placed as a linked pair: the target's fill cancels the stop.
     t.quote(5020.0)
-    assert t.ex.get_positions() == []
-    assert any(o["role"] == "stop" for o in t.ex.get_orders())
+    assert t.ex.get_positions() == [] and t.ex.get_orders() == []
+    # A stale leg that does outlive its position (a platform that dropped the link) is cleared by housekeeping.
+    b = t.venue.ledger.items[order().client_id]
+    t.fake.orders[b.stop_id]["ordStatus"] = "Working"
+    t.venue.refresh()
     assert [r.status for r in t.ex.housekeeping(F0)] == ["cancelled"] and t.ex.get_orders() == []
 
 
@@ -236,7 +239,7 @@ def test_the_ledger_survives_a_restart(t):
 
 def test_connect_refuses_a_contract_whose_numbers_differ_from_the_catalogue(tmp_path):
     clock = Clock(F0)
-    fake = FakeTradovate({"MESZ6": MESZ6_LAST_TRADE}, now=clock)
+    fake = FakeNinjaTrader({"MESZ6": MESZ6_LAST_TRADE}, now=clock)
     fake.products[next(iter(fake.products))]["valuePerPoint"] = 50.0
     v, _ = venue(clock, fake=fake)
     with pytest.raises(ContractMismatch):
@@ -245,8 +248,8 @@ def test_connect_refuses_a_contract_whose_numbers_differ_from_the_catalogue(tmp_
 
 def test_connect_needs_exactly_one_account(tmp_path):
     clock = Clock(F0)
-    v, _ = venue(clock, fake=FakeTradovate({"MESZ6": MESZ6_LAST_TRADE}, now=clock, other_accounts=1))
-    with pytest.raises(TradovateError, match="exactly one"):
+    v, _ = venue(clock, fake=FakeNinjaTrader({"MESZ6": MESZ6_LAST_TRADE}, now=clock, other_accounts=1))
+    with pytest.raises(NinjaTraderError, match="exactly one"):
         v.connect()
 
 
@@ -290,22 +293,22 @@ def test_tokens_are_renewed_before_they_expire_and_reacquired_after_a_401(t):
 
 
 def test_a_wrong_password_is_reported_without_echoing_secrets():
-    fake = FakeTradovate({})
-    c = TradovateClient("demo", Credentials("atlas", "hunter2", "a", "1", "0", "s3cr3t", "d"), transport=fake)
-    with pytest.raises(TradovateError) as e:
+    fake = FakeNinjaTrader({})
+    c = NinjaTraderClient("demo", Credentials("atlas", "hunter2", "a", "1", "0", "s3cr3t", "d"), transport=fake)
+    with pytest.raises(NinjaTraderError) as e:
         c.authenticate()
     assert "hunter2" not in str(e.value) and "s3cr3t" not in str(e.value)
     assert "hunter2" not in repr(c._creds) and "s3cr3t" not in repr(c._creds)
 
 
 def test_credentials_come_from_the_environment_only():
-    with pytest.raises(ValueError, match="ATLAS_TRADOVATE_PASSWORD"):
-        Credentials.from_env({"ATLAS_TRADOVATE_USER": "x"})
-    env = {v: "x" for v in ("ATLAS_TRADOVATE_USER", "ATLAS_TRADOVATE_PASSWORD", "ATLAS_TRADOVATE_APP_ID",
-                            "ATLAS_TRADOVATE_APP_VERSION", "ATLAS_TRADOVATE_CID", "ATLAS_TRADOVATE_SEC",
-                            "ATLAS_TRADOVATE_DEVICE_ID")}
+    with pytest.raises(ValueError, match="ATLAS_NINJATRADER_PASSWORD"):
+        Credentials.from_env({"ATLAS_NINJATRADER_USER": "x"})
+    env = {v: "x" for v in ("ATLAS_NINJATRADER_USER", "ATLAS_NINJATRADER_PASSWORD", "ATLAS_NINJATRADER_APP_ID",
+                            "ATLAS_NINJATRADER_APP_VERSION", "ATLAS_NINJATRADER_CID", "ATLAS_NINJATRADER_SEC",
+                            "ATLAS_NINJATRADER_DEVICE_ID")}
     assert Credentials.from_env(env).name == "x"
-    assert TradovateClient("live", CREDS).demo is False and TradovateClient("demo", CREDS).demo is True
+    assert NinjaTraderClient("live", CREDS).demo is False and NinjaTraderClient("demo", CREDS).demo is True
 
 
 def test_quote_frames_become_ticks():

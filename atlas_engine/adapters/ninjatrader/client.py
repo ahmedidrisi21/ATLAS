@@ -1,4 +1,5 @@
-"""Tradovate REST client (https://partner.tradovate.com, read 2026-10-05). Used by ``TradovateAdapter`` only.
+"""NinjaTrader API REST client. NinjaTrader's official API is the Tradovate API (api.tradovate.com spec,
+read 2026-10-06; partner.tradovate.com, read 2026-10-05). Used by ``NinjaTraderAdapter`` only.
 
 - Hosts: ``demo.tradovateapi.com/v1`` and ``live.tradovateapi.com/v1``. Which one
   is the account's demo flag: the engine refuses agent trades unless it is demo.
@@ -30,21 +31,21 @@ HOSTS = {"demo": "https://demo.tradovateapi.com/v1", "live": "https://live.trado
 MD_SOCKET = "wss://md.tradovateapi.com/v1/websocket"
 RENEW_BEFORE = dt.timedelta(minutes=15)
 MAX_PENALTY_WAIT_S = 60
-ENV_VARS = {"name": "ATLAS_TRADOVATE_USER", "password": "ATLAS_TRADOVATE_PASSWORD", "app_id": "ATLAS_TRADOVATE_APP_ID",
-            "app_version": "ATLAS_TRADOVATE_APP_VERSION", "cid": "ATLAS_TRADOVATE_CID", "sec": "ATLAS_TRADOVATE_SEC",
-            "device_id": "ATLAS_TRADOVATE_DEVICE_ID"}
+ENV_VARS = {"name": "ATLAS_NINJATRADER_USER", "password": "ATLAS_NINJATRADER_PASSWORD", "app_id": "ATLAS_NINJATRADER_APP_ID",
+            "app_version": "ATLAS_NINJATRADER_APP_VERSION", "cid": "ATLAS_NINJATRADER_CID", "sec": "ATLAS_NINJATRADER_SEC",
+            "device_id": "ATLAS_NINJATRADER_DEVICE_ID"}
 
 
-class TradovateError(BrokerUnavailable):
-    """Tradovate did not give a usable answer."""
+class NinjaTraderError(BrokerUnavailable):
+    """The NinjaTrader API did not give a usable answer."""
 
 
-class RateLimited(TradovateError):
+class RateLimited(NinjaTraderError):
     pass
 
 
-class OutcomeUnknown(TradovateError):
-    """A command was sent and no answer came back: it may or may not have reached Tradovate."""
+class OutcomeUnknown(NinjaTraderError):
+    """A command was sent and no answer came back: it may or may not have reached the platform."""
 
 
 @dataclass(frozen=True)
@@ -62,7 +63,7 @@ class Credentials:
         env = os.environ if env is None else env
         missing = [v for v in ENV_VARS.values() if not env.get(v)]
         if missing:
-            raise ValueError("missing Tradovate credentials in the engine host's environment: " + ", ".join(missing))
+            raise ValueError("missing NinjaTrader API credentials in the engine host's environment: " + ", ".join(missing))
         return cls(**{k: env[v] for k, v in ENV_VARS.items()})
 
     def body(self) -> dict:
@@ -94,11 +95,11 @@ def _parse_time(s: str) -> dt.datetime:
     return dt.datetime.fromisoformat(s.replace("Z", "+00:00"))
 
 
-class TradovateClient:
+class NinjaTraderClient:
     def __init__(self, env: str, credentials: Credentials, transport=urllib_transport, now=None, sleep=time.sleep,
                  timeout: float = 10.0):
         if env not in HOSTS:
-            raise ValueError(f"Tradovate environment must be one of {sorted(HOSTS)}")
+            raise ValueError(f"NinjaTrader API environment must be one of {sorted(HOSTS)}")
         self.env, self.base = env, HOSTS[env]
         self._creds = credentials
         self.transport, self.sleep, self.timeout = transport, sleep, timeout
@@ -118,7 +119,7 @@ class TradovateClient:
     def _take_token(self, r: dict) -> None:
         if not isinstance(r, dict) or r.get("errorText") or not r.get("accessToken"):
             # errorText is Tradovate's message (e.g. wrong password); it never contains the credentials.
-            raise TradovateError(f"Tradovate refused the login: {(r or {}).get('errorText') or 'no token returned'}")
+            raise NinjaTraderError(f"the NinjaTrader API refused the login: {(r or {}).get('errorText') or 'no token returned'}")
         self.token = r["accessToken"]
         self.md_token = r.get("mdAccessToken") or self.md_token
         self.expires = _parse_time(r["expirationTime"]) if r.get("expirationTime") else self.now() + dt.timedelta(minutes=80)
@@ -134,7 +135,7 @@ class TradovateClient:
         elif self.expires - self.now() < RENEW_BEFORE:
             try:
                 self._take_token(self._send("GET", "/auth/renewaccesstoken", None))
-            except TradovateError:
+            except NinjaTraderError:
                 self.authenticate()
 
     # -- calls ------------------------------------------------------------------------------------------
@@ -151,7 +152,7 @@ class TradovateClient:
             try:
                 status, data = self.transport(method, url, headers, payload, self.timeout)
             except OSError as e:
-                kind = OutcomeUnknown if method == "POST" else TradovateError
+                kind = OutcomeUnknown if method == "POST" else NinjaTraderError
                 raise kind(f"{method} {path}: no answer ({type(e).__name__})") from None
             if status == 429:
                 raise RateLimited(f"{path}: HTTP 429, Tradovate asks to wait an hour")
@@ -165,9 +166,9 @@ class TradovateClient:
                 self.sleep(wait)
                 continue
             if status == 401 and auth:
-                raise TradovateError(f"{path}: HTTP 401 (token rejected)")
+                raise NinjaTraderError(f"{path}: HTTP 401 (token rejected)")
             if status >= 400:
-                raise TradovateError(f"{method} {path}: HTTP {status}")
+                raise NinjaTraderError(f"{method} {path}: HTTP {status}")
             return data
         raise RateLimited(f"{path}: still rate limited after the penalty wait")
 
@@ -175,7 +176,7 @@ class TradovateClient:
         self._ensure_token()
         try:
             return self._send(method, path, body, params=params)
-        except TradovateError as e:
+        except NinjaTraderError as e:
             if "HTTP 401" not in str(e):
                 raise
             self.authenticate()

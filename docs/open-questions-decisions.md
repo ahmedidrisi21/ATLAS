@@ -1,7 +1,7 @@
 # Open questions: decisions
 
 > **Superseded in part on 2026-10-05.** The owner moved ATLAS to futures first: CME micro and mini
-> futures through a prop firm (FundedNext Futures as the worked example) on Tradovate. That replaces
+> futures through a prop firm (FundedNext Futures as the worked example), on NinjaTrader since 2026-10-06. That replaces
 > answers 2 (FTMO 2-Step, $10k), 4 (M15 forex bars) and 5 (FTMO's MT5 server and VPS region) below.
 > The forex path still works and is still tested. See `docs/futures.md`.
 

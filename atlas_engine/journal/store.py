@@ -21,7 +21,7 @@ from pathlib import Path
 # every model evaluation (with its model, calibration, feature-schema and strategy versions).
 TABLES = ("decisions", "risk_checks", "orders", "fills", "positions", "trades", "strategy_versions",
           "system_events", "latency_metrics", "experiments", "trade_intents", "agent_actions", "operator_commands",
-          "market_states", "model_evaluations", "calibration_models")
+          "market_states", "model_evaluations", "calibration_models", "execution_events")
 IDS = ("run_id", "state_id", "decision_id", "trade_id", "experiment_id", "kanban_task_id")
 
 

@@ -15,12 +15,12 @@ account:
 symbols: [MES]
 
 execution:
-  platform: tradovate
+  platform: ninjatrader
   contracts: {MES: MESZ6}      # December 2026; pin the next contract before the roll window
   roll_days: 5                 # no new entries within 5 days of last trade / first notice
   entry_cutoff_min: 30         # no new entries 30 min before the firm's 15:10 CT flat-by time
   flatten_lead_min: 10         # ATLAS closes its positions 10 min before it
-  require_watchdog: false      # the MT5 watchdog EA has no Tradovate equivalent; the firm auto-liquidates at its limit
+  require_watchdog: false      # the MT5 watchdog EA has no NinjaTrader equivalent; the firm auto-liquidates at its limit
   broker_poll_s: 5
   # commission_per_lot: {MES: <round turn per contract, USD>}  # set once the account's fees are known
   # no_trade_days: ["2026-11-27"]  # extra exchange no-trade days on top of the built-in holiday rules

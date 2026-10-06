@@ -187,6 +187,7 @@ class TradingEngine:
                             continue
                         for sig in signals:
                             self.submit(sig)
+            self._drain_execution(now)  # closes and flattens this step
             self._persist()
             if not self.db_ok and h["state"] not in (H.HALT, H.KILL):
                 h = self._evaluate(now)  # a failed write this step is a HALT now, not next step
@@ -402,6 +403,9 @@ class TradingEngine:
             if H.SEVERITY[h["state"]] >= H.SEVERITY[H.HALT] or self.last_state in (H.HALT, H.KILL):
                 self._alert("critical" if h["state"] in (H.HALT, H.KILL) else "info",
                             f"Engine state {self.last_state} -> {h['state']}: {', '.join(h['reasons']) or 'all checks green'}")
+            if h["state"] in (H.HALT, H.KILL) and (h["state"] != self.last_state or h["reasons"] != self.last_reasons):
+                self._lifecycle("killed" if h["state"] == H.KILL else "halted", now, previous=self.last_state,
+                                reasons=h["reasons"])
             self.last_state, self.last_reasons = h["state"], h["reasons"]
         if h["state"] == H.KILL:
             self._cancel_orders(now)  # PRD v3 §28: ATLAS sends market orders only, so normally none exist
@@ -436,6 +440,10 @@ class TradingEngine:
                     self.rules[intent.symbol] = rules
                 except BrokerUnavailable as e:
                     self._event("broker_unavailable", detail=str(e))
+            self._lifecycle("trade_intent_created", now, did, source=intent.source, strategy=intent.strategy,
+                            strategy_version=intent.strategy_version, symbol=intent.symbol, side=intent.side,
+                            intent_id=intent.intent_id or None)
+            self._lifecycle("validation_started", now, did)
             open_, closed_why, session = self._session(intent.symbol, now)
             ctx = Context(now=now, health=self.health_now, trading_enabled=self.trading["enabled"],
                           connected=self.connected and tick is not None, journal_ok=self.db_ok,
@@ -447,6 +455,7 @@ class TradingEngine:
                           roll_days=self.settings.roll_days)
             d = self.pipeline.evaluate(intent, ctx)
             self._drain_risk_events()
+            self._stage_events(d.stages, now, did)
             contract = getattr(rules, "contract", None)
             self._journal("market_states", {"symbol": intent.symbol, "bid": getattr(tick, "bid", None),
                                             "ask": getattr(tick, "ask", None), "last": getattr(tick, "last", None),
@@ -457,6 +466,7 @@ class TradingEngine:
                                             if contract is not None else None,
                                             "contract": contract.to_dict() if contract is not None else None,
                                             "session": session, "health": self.health_now.get("state"),
+                                            "data": self._provenance(intent.symbol, tick, contract, session, now),
                                             "symbol_health": self.health_now.get("symbols", {}).get(intent.symbol),
                                             "features": intent.features}, now, decision_id=did)
             if d.model is not None:
@@ -481,9 +491,13 @@ class TradingEngine:
             if not self.db_ok:  # never send an order the journal can't record
                 self.intents[cid]["status"] = "not_sent"
                 return self._decided(rec, "skipped", ["journal_unavailable"], now)
+            self._lifecycle("execution_requested", now, did, client_id=cid, symbol=intent.symbol,
+                            direction=intent.direction, volume=d.volume, stop=order.stop, target=d.target,
+                            platform=self.execution.platform)
             try:
                 res = self.execution.submit_order(order, now)
             except BrokerUnavailable as e:
+                self._drain_execution(now)
                 # Outcome unknown: the intent stays journaled, so reconciliation adopts a fill if one happened.
                 self.intents[cid]["status"] = "unknown"
                 self._event("order_outcome_unknown", symbol=intent.symbol, setup=intent.strategy, detail=str(e))
@@ -507,7 +521,10 @@ class TradingEngine:
                             reason=res.reason)
                 if res.status == "unprotected_closed":
                     self._alert("critical", f"{intent.symbol} fill had no SL at the broker and was closed: {res.reason}")
+            self._drain_execution(now)
             self.broker_positions = self._safe_positions()
+            if res.status == "unprotected_closed":
+                self.reconcile(now)  # at once, not at the next interval: the state is not trusted until it is clean
             self._persist()
             return self._decided(rec, res.status, [res.reason] if res.reason else [], now)
 
@@ -609,6 +626,8 @@ class TradingEngine:
             self.risk.record_close(now, pnl)
             self._drain_risk_events()
             self._journal("trades", trade, now, decision_id=mine.decision_id, trade_id=str(mine.ticket))
+            self._lifecycle("position_closed", now, mine.decision_id, ticket=mine.ticket, symbol=mine.symbol,
+                            exit=exit_px, exit_reason=outs[-1].reason, pnl=round(pnl, 2), r=trade["r"])
             self._event("trade_closed", ticket=mine.ticket, symbol=mine.symbol, pnl=round(pnl, 2),
                         reason=outs[-1].reason)
             closed.append(trade)
@@ -619,6 +638,7 @@ class TradingEngine:
     def reconcile(self, now: dt.datetime | None = None) -> dict:
         with self.lock:
             now = now or self.now()
+            self._lifecycle("reconciliation_started", now)
             tidy = getattr(self.execution, "housekeeping", None)  # futures: stale stop/target legs of closed brackets
             if tidy is not None:
                 try:
@@ -626,14 +646,28 @@ class TradingEngine:
                         self._journal("orders", {**r.to_dict(), "action": "cancel_stale_leg"}, now)
                 except BrokerUnavailable as e:
                     self._event("broker_unavailable", detail=str(e))
-            self.broker_positions = self._safe_positions()
+            actions, unresolved = [], []
+            try:
+                self.broker_positions = self.broker.positions()
+            except BrokerUnavailable as e:
+                # Never reconcile against a stale copy as if it were fresh: the state is not trusted, so HALT.
+                unresolved.append({"kind": "broker_state_unreadable", "symbol": None, "ticket": None,
+                                   "detail": str(e), "action": "retried at the next reconciliation"})
             self._close_missing(now)
             points = {s: r.point for s, r in self.rules.items()}
-            actions, unresolved = [], []
-            for f in diff(self.book, self.broker_positions, self.settings.magic_base, points):
+            for f in ([] if unresolved else diff(self.book, self.broker_positions, self.settings.magic_base, points)):
                 done, what = self._resolve(f, now)
                 entry = {"kind": f.kind, "symbol": f.symbol, "ticket": f.ticket, "detail": f.detail, "action": what}
                 (actions if done else unresolved).append(entry)
+            extra = getattr(self.execution, "findings", None)  # futures: unprotected positions, foreign orders
+            if extra is not None and not unresolved:
+                try:
+                    for f in extra():
+                        unresolved.append({**f, "action": "HALT until it is fixed at the platform or by the operator"})
+                except BrokerUnavailable as e:
+                    unresolved.append({"kind": "broker_state_unreadable", "symbol": None, "ticket": None,
+                                       "detail": str(e), "action": "retried at the next reconciliation"})
+            self._drain_execution(now)
             self.broker_positions = self._safe_positions()
             keys = set()
             for u in unresolved:
@@ -655,6 +689,9 @@ class TradingEngine:
                 "engine_positions": len(self.book), "broker_positions": len(self.broker_positions),
                 "status": "mismatch" if unresolved else "clean", "mismatches": unresolved, "actions": actions,
             }
+            self._lifecycle("reconciliation_completed", now, status=self.recon_report["status"],
+                            mismatches=[{k: u.get(k) for k in ("kind", "symbol", "ticket", "detail")} for u in unresolved],
+                            actions=len(actions))
             return self.recon_report
 
     def _resolve(self, f, now: dt.datetime) -> tuple[bool, str]:
@@ -1042,6 +1079,53 @@ class TradingEngine:
         self.event_log.append({"seq": self.seq, "at": iso(self.now()), "kind": kind, **detail})
         del self.event_log[:-MAX_EVENTS]
         self._journal("system_events", {"event": kind, **detail}, self.now())
+
+    # Pipeline stages -> lifecycle events (PRD v3 §31): the decisions row keeps the whole record; these give
+    # each step its own journal row, in order, keyed by decision_id.
+    STAGE_EVENTS = {"model": "probability_returned", "ev": "ev_calculated", "risk": "risk_calculated",
+                    "sizing": "size_calculated", "exposure": "exposure_checked", "prop": "prop_policy_checked"}
+    VALIDATION_STAGES = ("system_state", "setup", "market", "strategy")
+
+    def _lifecycle(self, event: str, at: dt.datetime, decision_id: str | None = None, **detail) -> None:
+        self._journal("execution_events", {"event": event, **detail}, at, decision_id=decision_id)
+
+    def _stage_events(self, stages: list[dict], now: dt.datetime, did: str) -> None:
+        val = [s for s in stages if s["stage"] in self.VALIDATION_STAGES]
+        if val:
+            self._lifecycle("validation_completed", now, did, ok=all(s["ok"] for s in val),
+                            stages=[s["stage"] for s in val], reasons=[r for s in val for r in s.get("reasons", [])])
+        for s in stages:
+            name = self.STAGE_EVENTS.get(s["stage"])
+            if name is None:
+                continue
+            if s["stage"] == "model":
+                self._lifecycle("probability_requested", now, did)
+            self._lifecycle(name, now, did, **{k: v for k, v in s.items() if k != "stage"})
+
+    def _provenance(self, symbol: str, tick, contract, session, now: dt.datetime) -> dict | None:
+        if tick is None:
+            return None
+        from atlas_engine.market_data.provenance import DataProvenance
+
+        age = round((now - tick.time).total_seconds(), 3)
+        mode = "live" if self.account is not None and not self.account.demo else "paper"
+        return DataProvenance(getattr(self.broker, "data_source", self.source), mode,
+                              contract.symbol if contract is not None else symbol, "none",
+                              (session or {}).get("phase") if isinstance(session, dict) else session, tick.time, age,
+                              "stale" if age > 30 else "ok").to_dict()
+
+    def _drain_execution(self, now: dt.datetime) -> None:
+        """Journal the execution adapter's lifecycle events with the decision each one serves."""
+        drain = getattr(self.execution, "drain_events", None)
+        if drain is None:
+            return
+        for e in drain():
+            cid = e.get("client_id")
+            did = (self.intents.get(cid) or {}).get("decision_id")
+            if did is None and cid:
+                mine = self.book.by_client_id(cid)
+                did = mine.decision_id if mine is not None else None
+            self._lifecycle(e.pop("event"), now, did, **e)
 
     def _alert(self, severity: str, text: str) -> None:
         if self.alerts is not None:

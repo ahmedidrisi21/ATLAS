@@ -23,7 +23,7 @@ DAILY_BASES = {"initial_balance", "day_start_balance", "day_start_equity"}
 DAILY_REFERENCES = {"day_start_balance", "day_start_equity", "day_start_max", "initial_balance"}
 MAX_LOSS_TYPES = {"static", "trailing_eod", "trailing_intraday"}
 MODES = {"evaluation", "funded"}
-FUTURES_KEYS = {"contract_limit", "tz", "flat_by", "reopen", "hedging_correlated", "min_bracket_ticks"}
+FUTURES_KEYS = {"contract_limit", "tz", "flat_by", "reopen", "hedging_correlated", "min_bracket_ticks", "products"}
 
 
 @dataclass(frozen=True)
@@ -57,6 +57,7 @@ class FuturesRules:
     reopen: dt.time | None  # trading resumes at this time (the next trading day's session)
     hedging_correlated: bool  # may hold opposite positions in one asset group
     min_bracket_ticks: int  # stop and target at least this many ticks from entry (scalping rules)
+    products: tuple[str, ...] | None = None  # product roots the firm allows; None: the file doesn't restrict
 
 
 @dataclass(frozen=True)
@@ -250,8 +251,12 @@ def _futures(f, where: str) -> FuturesRules | None:
     flat_by, reopen = _time(f.get("flat_by"), where, "flat_by"), _time(f.get("reopen"), where, "reopen")
     if (flat_by is None) != (reopen is None) or (flat_by is not None and not flat_by < reopen):
         raise ValueError(f"{where}: futures.flat_by and futures.reopen go together, flat_by first")
+    allowed = f.get("products")
+    if allowed is not None and (not isinstance(allowed, list) or not all(isinstance(x, str) and x for x in allowed)):
+        raise ValueError(f"{where}: futures.products must be a list of product roots")
     return FuturesRules(None if minis is None else float(minis), ratio, tz, flat_by, reopen,
-                        bool(f.get("hedging_correlated", True)), ticks)
+                        bool(f.get("hedging_correlated", True)), ticks,
+                        None if allowed is None else tuple(sorted(x.upper() for x in allowed)))
 
 
 def _only(d: dict, allowed: set[str], where: str, ctx: str) -> None:

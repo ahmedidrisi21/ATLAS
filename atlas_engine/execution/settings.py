@@ -22,7 +22,10 @@ EXECUTION_KEYS = {"max_deviation_points", "reconcile_interval_s", "magic_base", 
                   "no_trade_days", "broker_poll_s"}
 FILTER_KEYS = {"max_spread_to_stop_ratio", "news_blackout_min", "rollover_blackout_ny", "friday_flatten_utc"}
 ORPHAN_POLICIES = {"close", "attach_sl"}
-PLATFORM_NAMES = {"mt5", "tradovate"}
+PLATFORM_NAMES = {"mt5", "ninjatrader"}
+# NinjaTrader's official API is the Tradovate API (docs/futures.md, "One API, two names"), so "tradovate"
+# names the same adapter, not a second one.
+PLATFORM_ALIASES = {"tradovate": "ninjatrader"}
 
 
 @dataclass(frozen=True)
@@ -74,6 +77,8 @@ def load_execution_settings(root: str | Path = "config") -> ExecutionSettings:
             v = given[f.name]
             kw[f.name] = tuple(v) if isinstance(v, list) else v
     kw["defaults_used"] = tuple(sorted((EXECUTION_KEYS | FILTER_KEYS) - set(given)))
+    if "platform" in kw:
+        kw["platform"] = PLATFORM_ALIASES.get(str(kw["platform"]).lower(), kw["platform"])
     s = ExecutionSettings(**kw)
     checks = [
         (0 <= s.max_deviation_points <= 20, "execution.max_deviation_points must be in 0..20"),

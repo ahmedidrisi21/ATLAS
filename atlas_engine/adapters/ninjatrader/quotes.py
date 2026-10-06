@@ -9,7 +9,7 @@ sends ``[]`` every 2.5 s or the server drops the socket.
 
 ``QuoteBook`` turns quote events into ``Tick`` records and is what the adapter
 reads; it is plain and tested. ``QuoteStream`` runs the socket in a thread and
-needs the optional ``websocket-client`` package (``pip install .[tradovate]``),
+needs the optional ``websocket-client`` package (``pip install .[ninjatrader]``),
 imported only when it starts.
 """
 
@@ -81,10 +81,10 @@ class QuoteStream:
         try:
             import websocket  # noqa: F401  (optional dependency: websocket-client)
         except ImportError as e:
-            raise BrokerUnavailable("Tradovate quotes need websocket-client: pip install '.[tradovate]'") from e
+            raise BrokerUnavailable("Tradovate quotes need websocket-client: pip install '.[ninjatrader]'") from e
         if self._thread is None or not self._thread.is_alive():
             self._stop.clear()
-            self._thread = threading.Thread(target=self._run, name="tradovate-quotes", daemon=True)
+            self._thread = threading.Thread(target=self._run, name="ninjatrader-quotes", daemon=True)
             self._thread.start()
 
     def stop(self) -> None:

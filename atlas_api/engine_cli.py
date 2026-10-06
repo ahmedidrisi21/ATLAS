@@ -20,11 +20,12 @@ the engine's inbox, never API calls.
 
     mt5             the ``MetaTrader5`` package and a logged-in terminal on Windows
     fake            the in-process fake MT5 terminal, for drills
-    tradovate       Tradovate's API (futures-first, docs/futures.md). Credentials come only from the
-                    host environment: ATLAS_TRADOVATE_USER, _PASSWORD, _APP_ID, _APP_VERSION, _CID, _SEC,
-                    _DEVICE_ID; ATLAS_TRADOVATE_ENV is demo (default) or live; ATLAS_TRADOVATE_ACCOUNT
+    ninjatrader     NinjaTrader's official API (futures-first, docs/futures.md; it is the Tradovate API, so
+                    ``tradovate`` is accepted as the same thing). Credentials come only from the host
+                    environment: ATLAS_NINJATRADER_USER, _PASSWORD, _APP_ID, _APP_VERSION, _CID, _SEC,
+                    _DEVICE_ID; ATLAS_NINJATRADER_ENV is demo (default) or live; ATLAS_NINJATRADER_ACCOUNT
                     picks the account when the login has several.
-    fake-tradovate  the in-process Tradovate stand-in, for drills
+    fake-ninjatrader  the in-process NinjaTrader API stand-in, for drills (alias fake-tradovate)
 
 The fakes use no network, no broker and send no orders anywhere.
 """
@@ -80,14 +81,15 @@ def build_engine(args):
 
     cfg = load_engine_config(args.config, require_read_only=not args.allow_writable_config)
     settings = load_execution_settings(args.config)
-    platform = "tradovate" if args.broker in ("tradovate", "fake-tradovate") else "mt5"
+    broker = BROKER_ALIASES.get(args.broker, args.broker)
+    platform = "ninjatrader" if broker in ("ninjatrader", "fake-ninjatrader") else "mt5"
     if settings.platform != platform:
         raise SystemExit(f"--broker {args.broker} needs execution.platform: {platform} in atlas.yaml "
                          f"(it says {settings.platform})")
     state = Path(args.state)
     clock = ServerClock(settings.server_tz, settings.server_offset_hours)
-    if platform == "tradovate":
-        adapter, label = tradovate_venue(args.broker, cfg, settings, state)
+    if platform == "ninjatrader":
+        adapter, label = ninjatrader_venue(broker, cfg, settings, state)
     elif args.broker == "mt5":
         try:
             import MetaTrader5 as mt5  # noqa: N813 - Windows engine host only
@@ -124,10 +126,13 @@ def build_engine(args):
                          decision=decision, models=models)
 
 
-def tradovate_venue(broker: str, cfg, settings, state: Path, env: dict | None = None):
-    """The Tradovate venue for the pinned contracts, real or the in-process stand-in."""
-    from atlas_engine.adapters.tradovate import Credentials, FakeTradovate, TradovateAdapter, TradovateClient
-    from atlas_engine.adapters.tradovate.fake import FakeQuoteBook
+BROKER_ALIASES = {"tradovate": "ninjatrader", "fake-tradovate": "fake-ninjatrader"}  # the same API
+
+
+def ninjatrader_venue(broker: str, cfg, settings, state: Path, env: dict | None = None):
+    """The NinjaTrader venue for the pinned contracts, real or the in-process stand-in."""
+    from atlas_engine.adapters.ninjatrader import Credentials, FakeNinjaTrader, NinjaTraderAdapter, NinjaTraderClient
+    from atlas_engine.adapters.ninjatrader.fake import FakeQuoteBook
     from atlas_engine.config import ConfigError
     from atlas_engine.execution import pinned_contracts
 
@@ -138,21 +143,22 @@ def tradovate_venue(broker: str, cfg, settings, state: Path, env: dict | None = 
     except ConfigError as e:
         raise SystemExit(str(e)) from None
     if not pins:
-        raise SystemExit("execution.platform tradovate trades futures; atlas.yaml lists no futures symbols")
-    common = dict(ledger_path=state / "tradovate-brackets.json", commission_per_contract=settings.commission_per_lot,
+        raise SystemExit("execution.platform ninjatrader trades futures; atlas.yaml lists no futures symbols")
+    common = dict(ledger_path=state / "ninjatrader-brackets.json", commission_per_contract=settings.commission_per_lot,
                   poll_s=settings.broker_poll_s)
-    if broker == "tradovate":
+    if broker == "ninjatrader":
         try:
-            client = TradovateClient(env.get("ATLAS_TRADOVATE_ENV", "demo"), Credentials.from_env(env))
+            client = NinjaTraderClient(env.get("ATLAS_NINJATRADER_ENV", "demo"), Credentials.from_env(env))
         except ValueError as e:
             raise SystemExit(str(e)) from None
-        venue = TradovateAdapter(client, pins, account_name=env.get("ATLAS_TRADOVATE_ACCOUNT"), **common)
-        return venue, f"tradovate-{client.env}"
+        venue = NinjaTraderAdapter(client, pins, account_name=env.get("ATLAS_NINJATRADER_ACCOUNT"), **common)
+        return venue, f"ninjatrader-{client.env}"
     expiry = dt.datetime.combine(today + dt.timedelta(days=60), dt.time(13, 30), dt.timezone.utc)
-    fake = FakeTradovate({code: expiry for code in pins.values()})
-    client = TradovateClient("demo", Credentials("drill", "pw", "atlas", "1", "0", "-", "drill"), transport=fake)
-    venue = TradovateAdapter(client, pins, quotes=FakeQuoteBook(fake), stream=False, **common)
-    return venue, "fake-tradovate"
+    fake = FakeNinjaTrader({code: expiry for code in pins.values()})
+    client = NinjaTraderClient("demo", Credentials("drill", "pw", "atlas", "1", "0", "-", "drill"), transport=fake)
+    venue = NinjaTraderAdapter(client, pins, quotes=FakeQuoteBook(fake), stream=False, **common)
+    venue.data_source = "fake-ninjatrader"
+    return venue, "fake-ninjatrader"
 
 
 def load_jev(assignment: dict, decision, state: Path, env: dict | None = None) -> list:
@@ -191,7 +197,7 @@ def main(argv: list[str] | None = None) -> None:
     r.add_argument("--state", required=True, help="engine state directory (journal, inbox, alerts)")
     r.add_argument("--tokens", required=True, help="engine token hash file")
     r.add_argument("--operator-key", help="operator HMAC key file (mode 600)")
-    r.add_argument("--broker", choices=["mt5", "fake", "tradovate", "fake-tradovate"], default="mt5")
+    r.add_argument("--broker", choices=["mt5", "fake", "ninjatrader", "fake-ninjatrader", *BROKER_ALIASES], default="mt5")
     r.add_argument("--host", default="127.0.0.1")
     r.add_argument("--port", type=int, default=8742)
     r.add_argument("--poll", type=float, default=1.0, help="seconds between engine steps")

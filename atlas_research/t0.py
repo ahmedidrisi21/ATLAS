@@ -195,6 +195,33 @@ def random_control(runner: Runner, reference: pd.DataFrame, windows: list[Window
     return np.array(out)
 
 
+def buy_and_hold_r(trades: pd.DataFrame, markets: list[Market], windows: list[Window]) -> np.ndarray:
+    """Per trade, the R that holding the market long over the same hours would have earned.
+
+    The buy-and-hold rate is the mean mid-price log return per calendar hour over
+    ``windows`` (the strategy's out-of-sample windows), charged no costs. Each
+    trade's benchmark is that rate x its hours held x its entry price, on its
+    own risk, signed by its direction: exposure-matched buy-and-hold.
+    """
+    if trades.empty:
+        return np.array([])
+    rate = {}
+    for m in markets:
+        mid = (m.m1["bid_c"] + m.m1["ask_c"]) / 2
+        logret = hours = 0.0
+        for a, b in windows:
+            w = mid.loc[(mid.index >= a) & (mid.index < b)]
+            if len(w) > 1:
+                logret += float(np.log(w.iloc[-1] / w.iloc[0]))
+                hours += (w.index[-1] - w.index[0]).total_seconds() / 3600
+        rate[m.symbol] = logret / hours if hours else 0.0
+    held = (pd.to_datetime(trades["exit_time"], utc=True) - pd.to_datetime(trades["entry_time"], utc=True)).dt.total_seconds() / 3600
+    mu = trades["symbol"].map(rate).to_numpy(float)
+    entry = trades["entry"].to_numpy(float)
+    pts = entry * np.expm1(mu * held.to_numpy(float))
+    return trades["direction"].to_numpy(float) * pts / trades["risk"].to_numpy(float)
+
+
 def gate(name: str, value: float, op: str, threshold: float, scope: str, source: str = "PRD §15") -> dict:
     passed = {">=": value >= threshold, ">": value > threshold, "<": value < threshold, "<=": value <= threshold}[op]
     return {"gate": name, "value": value, "rule": f"{op} {threshold:g}", "passed": bool(passed), "scope": scope, "source": source}
@@ -226,7 +253,7 @@ def run_t0(
     ex = {**cfg["exits"], **scfg.get("exits", {})}
     exits = ExitPolicy(rr=ex["rr"], friday_flatten_utc=ex["friday_flatten_utc"],
                        atr_trail_mult=ex.get("atr_trail_mult"), atr_trail_after_r=ex.get("atr_trail_after_r", 1.5))
-    filters = EdgeFilters(**cfg["filters"])
+    filters = EdgeFilters(**{**cfg["filters"], **scfg.get("filters", {})})
     runner = Runner(setup, markets, exits, filters)
     base_mult = cfg["costs"]["spread_mult"]
     stress_mult = cfg["costs"]["stress_spread_mult"]
@@ -303,6 +330,14 @@ def run_t0(
         gate("Expectancy minus random-entry p95 (R)", float(r.mean() - rand_p95) if len(r) else 0.0, ">", 0.0, "all OOS", ours),
         gate("Worst ±20% neighbour expectancy (R)", min(nbr) if nbr else 0.0, ">", 0.0, "validation", ours),
     ]
+    benchmark = None
+    if scfg.get("benchmark") == "buy_and_hold":
+        bh = buy_and_hold_r(oos, markets, oos_windows + [val])
+        benchmark = {"kind": "buy_and_hold", "mean_r": float(bh.mean()) if len(bh) else 0.0}
+        gates.append(gate("Expectancy minus exposure-matched buy-and-hold (R)", float(r.mean() - bh.mean()) if len(r) else 0.0,
+                          ">", 0.0, "all OOS", "MES round 2 declaration"))
+    elif scfg.get("benchmark") is not None:
+        raise ValueError(f"{strategy}: unknown benchmark {scfg['benchmark']!r}")
     passed = all(x["passed"] for x in gates)
 
     exp_id = f"{strategy}-{now:%Y%m%d-%H%M%S}-" + hashlib.sha1(json.dumps([scfg, cfg["segments"]], sort_keys=True, default=str).encode()).hexdigest()[:6]
@@ -329,6 +364,7 @@ def run_t0(
         "dsr": {"value": dsr, "n_trials": n_trials, "var_trials": var_trials},
         "random_control": {"runs": len(rand), "mean": float(rand.mean()) if len(rand) else 0.0, "p95": rand_p95},
         "neighbours": nbr,
+        "benchmark": benchmark,
         # Kanban handoff shape from PRD §4.
         "kanban_metadata": {
             "experiment_id": exp_id,

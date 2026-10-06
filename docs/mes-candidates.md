@@ -102,7 +102,9 @@ or no edge even before costs.**
 
 R is the profit or loss of a trade divided by the amount risked. +0.10 R a
 trade means 10 cents of profit for each dollar risked. "Gross" is before
-commission, slippage and fees but already includes the stressed spread.
+commission only: the stressed spread and the slippage are already in the fill
+prices. (Corrected in round 2; an earlier version said gross was also before
+slippage.)
 
 ### Summary (out-of-sample: walk-forward test windows plus validation)
 
@@ -230,4 +232,228 @@ Reproduce:
 atlas-research data download --symbols USA500IDXUSD     # ~4,750 day-files; the feed answers 503/429 often, rerun to resume
 atlas-research data build    --symbols USA500IDXUSD
 atlas-research --config atlas_research/configs/mes.yaml t0 run --all
+```
+
+# MES round 2: time-of-day index effects (declared 2026-10-06)
+
+## Declaration (written before any round-2 run)
+
+Round 2 tests four ideas. Three are well-known published effects in the S&P 500.
+The fourth, the long-only channel breakout, was suggested by round 1's
+results, and that is why it gets an extra benchmark. The strategies, grids and
+stops are fixed in `atlas_research/configs/mes.yaml`, written there before anything ran
+(uncommitted until the operator reviews this round). **The gates are the unchanged T0 gates**
+(same thresholds, same dev / walk-forward / validation split, same costs, same
+random-entry control). The holdout (July 2025 on) stays locked. Nothing is
+retuned after the results.
+
+| Strategy | Setup | Bar | Hypothesis | Grid (points) | Fixed |
+| --- | --- | --- | --- | --- | --- |
+| `mes_intraday_momentum_m30` | `intraday_momentum` (new) | 30 min | Gao, Han, Li & Zhou (2018): the return from the prior 16:00 close (or 09:30) to 10:00 New York predicts the last half hour. Enter at 15:30 New York in that direction. | signal from prior close / 09:30 open × exit 16:00 / 15:55 (4) | stop 2 × M30 ATR(14) |
+| `mes_overnight_drift_h1` | `overnight_drift` (new) | 1 h | Overnight drift (Cooper, Cliff & Gulen 2008; Boyarchenko, Larsen & Whelan 2023): long from the 16:00 close to the next 09:30 open, or a short hold to 04:00 (after the European open). | exit 09:30 / 04:00 (2) | long only, stop 3 × H1 ATR(14); Fridays excluded (no weekend holds) |
+| `mes_channel_breakout_long_h4` | `channel_breakout`, `sides: long` | 4 h | Long-only H4 channel breakout. New hypothesis, from round 1's long/short split. | channel 20 / 55 × stop 1.5 / 2.5 ATR (4) | 2R target, Friday 20:00 UTC flatten, as in round 1 |
+| `mes_opening_gap_m30` | `opening_gap` (new) | 30 min | Fade, or follow, the overnight gap (prior 16:00 close to 09:30 New York). | fade / follow × exit 10:30 / 15:55 (4) | any non-zero gap, stop 4 × M30 ATR(14) |
+
+**Extra benchmark for the long-only strategies** (overnight drift, long-only
+channel breakout). Both must beat buy-and-hold with the same exposure, as one
+more gate: the average R after costs minus the R that a long S&P position
+would have earned over the same hours on the same risk must be above 0. The
+buy-and-hold rate is the mean log return per calendar hour over the same
+out-of-sample windows, charged no costs. The random-entry gate also applies
+unchanged. For an all-long strategy it draws random long entries with the same
+stops and holding times.
+
+**How R is defined for a time exit.** Three of these trades close at a clock
+time, not at a target or a stop. Each still has a protective stop, fixed in
+advance as an ATR multiple. That stop is the distance the engine would size
+the position on, so 1R is the stop distance, as for every other strategy:
+R = direction × (exit − entry) / (entry − stop), minus costs over the same
+distance. A trade that reaches its stop loses about 1R. Most trades end at the
+clock, somewhere between −1R and a few R. Because a wider stop means fewer
+contracts, the R numbers depend on the stop chosen. That is why the stop is
+fixed and not part of the grid. There is no target, so the engine's
+`p_target_first` (the chance the target is hit before the stop) doesn't apply
+as defined. These strategies report it as the share of trades that close in
+profit, and say so.
+
+**Engine readiness.** The live engine builds features on 15-minute bars only,
+supports a fixed-R target only, and has no per-trade time exit. It flattens only
+at the prop firm's flat-by time and on Fridays. Any round-2 strategy that passes
+would need engine work before it could run on the demo account: 30-minute or
+hourly features, and a per-trade time exit. The overnight hold would also
+conflict with a prop firm's flat-by rule.
+
+## Round 2 results
+
+**Bottom line: none of the four strategies passed. There is again nothing to
+forward-test on the demo account, and no draft strategy file was written.**
+Each strategy ran once, as declared, with no reruns and no retuning. All four
+runs are in `research/experiments.jsonl`:
+
+- `mes_intraday_momentum_m30-20261006-041925-9b3b8b`
+- `mes_overnight_drift_h1-20261006-041954-60bb93`
+- `mes_channel_breakout_long_h4-20261006-042013-7cd8a4`
+- `mes_opening_gap_m30-20261006-042023-8e7053`
+
+Before the runs, a signal-count check was done on the dev data, with no
+simulation and no R. It confirmed that each setup fires at the declared
+New York times on the expected weekdays.
+
+"Gross" below means before commission. The spread (stressed ×1.5) and the
+1-tick slippage on market fills are already inside the fill prices.
+
+### Summary (out-of-sample: walk-forward test windows plus validation)
+
+| Strategy | Trades | Avg R gross | Avg R after costs | Win rate | Max drawdown | Gates failed | Verdict |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Intraday momentum (M30, 15:30→close) | 1,371 | −0.049 | **−0.065** | 44.2% | 93.4 R | 11 of 14 | FAIL |
+| Overnight drift (16:00→next morning) | 1,099 | +0.014 | **+0.006** | 53.1% | 17.5 R | 11 of 15 | FAIL |
+| Long-only channel breakout (H4) | 231 | +0.154 | **+0.145** | 49.4% | 11.7 R | 7 of 15 | FAIL |
+| Opening gap (M30, fade/follow) | 1,411 | +0.003 | **−0.009** | 46.4% | 38.0 R | 11 of 14 | FAIL |
+
+The two long-only strategies have 15 gates, because the exposure-matched
+buy-and-hold benchmark was added to them.
+
+### By year (out-of-sample, after costs)
+
+| Year | Momentum trades | Momentum avg R | Overnight trades | Overnight avg R | Long channel trades | Long channel avg R | Gap trades | Gap avg R |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 2020 | 251 | −0.087 | 203 | +0.028 | 42 | +0.088 | 254 | +0.001 |
+| 2021 | 251 | −0.082 | 202 | +0.010 | 47 | +0.304 | 258 | −0.086 |
+| 2022 | 250 | −0.047 | 200 | −0.035 | 35 | −0.216 | 258 | +0.020 |
+| 2023 | 248 | −0.051 | 198 | −0.035 | 37 | +0.120 | 256 | +0.045 |
+| 2024 | 249 | −0.075 | 199 | +0.082 | 46 | +0.371 | 259 | −0.041 |
+| 2025 (H1) | 122 | −0.034 | 97 | −0.037 | 24 | +0.067 | 126 | +0.023 |
+
+### Dev vs validation, after costs
+
+| Strategy | Dev OOS trades | Dev avg R | Dev PF | Validation trades | Validation avg R | Validation PF | Final parameters |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Intraday momentum | 1,000 | −0.067 | 0.68 | 371 | −0.062 | 0.70 | return from 09:30, exit 15:55 |
+| Overnight drift | 803 | −0.008 | 0.96 | 296 | +0.043 | 1.19 | exit at the next 09:30 |
+| Long-only channel | 161 | +0.092 | 1.19 | 70 | +0.267 | 1.62 | 20-bar channel, 1.5 × ATR stop |
+| Opening gap | 1,026 | −0.005 | 0.99 | 385 | −0.020 | 0.96 | fade, exit 15:55 |
+
+### Gates (pass / fail)
+
+| Gate (threshold) | Momentum | Overnight | Long channel | Gap |
+| --- | --- | --- | --- | --- |
+| OOS trades (≥ 300) | pass 1,371 | pass 1,099 | **fail** 231 | pass 1,411 |
+| Avg R after costs, dev (≥ +0.10) | **fail** −0.067 | **fail** −0.008 | **fail** +0.092 | **fail** −0.005 |
+| Avg R after costs, validation (≥ +0.10) | **fail** −0.062 | **fail** +0.043 | pass +0.267 | **fail** −0.020 |
+| Profit factor, dev (≥ 1.25) | **fail** 0.68 | **fail** 0.96 | **fail** 1.19 | **fail** 0.99 |
+| Profit factor, validation (≥ 1.25) | **fail** 0.70 | **fail** 1.19 | pass 1.62 | **fail** 0.96 |
+| Monte Carlo drawdown p95 (< 6%) | **fail** 38.4% | **fail** 10.6% | **fail** 7.2% | **fail** 26.0% |
+| Daily-loss breach probability (< 2%) | pass 0% | pass 0% | pass 0% | pass 0% |
+| Deflated Sharpe (> 0.95) | **fail** 0.00 (4 trials) | **fail** 0.50 (2) | **fail** 0.71 (16) | **fail** 0.02 (4) |
+| Walk-forward efficiency (≥ 50%) | **fail** 0% | **fail** < 0 | pass 77% | **fail** < 0 |
+| Avg R at 2× spread (> 0) | **fail** −0.072 | pass +0.003 | pass +0.142 | **fail** −0.014 |
+| Largest year's share of profit (≤ 40%) | **fail** 100% | **fail** (total ≈ 0) | **fail** 51% | **fail** 100% |
+| Skip-10% Monte Carlo p05 (> 0) | **fail** −0.072 | **fail** −0.003 | pass +0.100 | **fail** −0.024 |
+| Beats random entries' p95 (> 0) | pass +0.003 | **fail** −0.036 | **fail** −0.028 | pass +0.006 |
+| Worst ±20% neighbour (> 0) | **fail** −0.073 | pass +0.034 | pass +0.183 | **fail** −0.020 |
+| Beats exposure-matched buy-and-hold (> 0) | n/a | **fail** −0.020 | pass +0.072 | n/a |
+
+`p_target_first`, for reference only, since nothing passed: the long-only
+channel breakout reached its 2R target first on 0.182 of trades. The three
+time-exit strategies have no target, so this is the share of trades that
+closed in profit, as declared: momentum 0.442, overnight 0.531, gap 0.464.
+Exits for the time-exit strategies:
+
+- Momentum: 1,305 at the clock and 66 at the stop.
+- Overnight: 994 at the clock and 104 at the stop.
+- Gap: 986 at the clock and 425 at the stop. The 4 × ATR stop is tight next
+  to the session's range, because the ATR at 09:30 is measured on the quiet
+  overnight bars.
+
+One overnight trade and one channel trade were still open when the validation
+data ends on 2025-06-30. Both were closed at the last bar before the holdout.
+
+### Every grid point (dev and validation, after costs)
+
+These are the same deterministic backtests the T0 runs made, read per point:
+
+| Strategy | Parameters | Dev trades | Dev avg R (gross) | Validation trades | Validation avg R |
+| --- | --- | --- | --- | --- | --- |
+| Momentum | from prior close, exit 16:00 | 1,247 | −0.088 (−0.068) | 371 | −0.056 |
+| Momentum | from prior close, exit 15:55 | 1,247 | −0.078 (−0.058) | 371 | −0.043 |
+| Momentum | from 09:30, exit 16:00 | 1,242 | −0.097 (−0.077) | 371 | −0.063 |
+| Momentum | from 09:30, exit 15:55 | 1,242 | −0.077 (−0.056) | 371 | −0.062 |
+| Overnight | exit 09:30 | 1,002 | +0.004 (+0.014) | 296 | +0.043 |
+| Overnight | exit 04:00 | 1,002 | −0.010 (−0.000) | 296 | +0.008 |
+| Long channel | 20 bars, 1.5 ATR | 222 | +0.099 (+0.112) | 70 | +0.267 |
+| Long channel | 20 bars, 2.5 ATR | 187 | +0.051 (+0.058) | 61 | +0.212 |
+| Long channel | 55 bars, 1.5 ATR | 168 | +0.005 (+0.019) | 51 | +0.279 |
+| Long channel | 55 bars, 2.5 ATR | 144 | −0.003 (+0.005) | 44 | +0.194 |
+| Gap | fade, exit 10:30 | 1,282 | −0.048 (−0.034) | 385 | −0.063 |
+| Gap | fade, exit 15:55 | 1,282 | −0.011 (+0.003) | 385 | −0.020 |
+| Gap | follow, exit 10:30 | 1,282 | −0.063 (−0.048) | 385 | −0.019 |
+| Gap | follow, exit 15:55 | 1,282 | −0.060 (−0.046) | 385 | −0.055 |
+
+### What round 2 says
+
+- **Intraday momentum doesn't exist here.** At the mid price, before spread,
+  slippage and commission, it averages about 0.00 R a trade. That figure is
+  approximate: it adds back 0.875 points of spread and slippage, or about
+  0.05 R on a median stop of 19.5 points. The spread and slippage alone make
+  it lose at every grid point and in every year from 2020 to 2025. That fits
+  later reports that the published effect weakened after the sample it was
+  found in. It "beats" the random-entry control only because random
+  30-minute holds at any hour do even worse after costs.
+- **The overnight drift is too small to trade on one contract's risk.** It
+  makes +0.014 R a trade before costs and +0.006 R after. That is less than
+  exposure-matched buy-and-hold (+0.026 R for the same hours) and inside the
+  range of random long holds. The dev period is negative. Excluding Fridays
+  (no weekend holds) removes part of the documented effect, but the rule was
+  declared before the run. A firm's flat-by rule would forbid the trade anyway.
+- **The long-only channel breakout is the best result so far and still a
+  fail.** It makes +0.145 R after costs, beats exposure-matched buy-and-hold
+  by +0.072 R, and its walk-forward efficiency (77%) and ±20% neighbours are
+  fine. But:
+  - It has 231 trades, short of the 300-trade minimum.
+  - Dev OOS is +0.092 R, under +0.10 R, with a profit factor of 1.19.
+  - Random long entries with the same stops and exits reach +0.173 R at the
+    95th percentile, above the strategy. On this sample, any long entry with
+    a 2R target did about as well, so the breakout trigger adds nothing
+    measurable over the S&P's drift.
+  - 2022 lost −0.22 R a trade, and 2021 plus 2024 made half the profit.
+- **The opening gap is noise.** Fade and follow both lose a little at every
+  exit. The best point, fade to 15:55, is −0.011 R on dev.
+
+## Round 2 caveats
+
+- The holdout was never loaded. Every run ends at 2025-07-01.
+- The deflated Sharpe for the long-only channel pools its 4 trials with the
+  12 earlier `channel_breakout` trials, from forex and MES round 1, as the
+  harness requires.
+- The random-entry control for the time-exit strategies gives random entries
+  the strategy's own holding times, at any time of day. For the long-only
+  strategies every random entry is long, so the control is also a
+  buy-and-hold test.
+- The engine readiness note in the declaration stands. These strategies would
+  need 30-minute or hourly features and a per-trade time exit in the engine.
+  The overnight hold also conflicts with a prop firm's flat-by rule.
+
+## Round 2 files
+
+- `atlas_engine/setups/intraday_momentum.py`, `overnight_drift.py` and
+  `opening_gap.py`: the new time-of-day setups. The New York clock helpers
+  are in `base.py`.
+- `atlas_engine/setups/channel_breakout.py`: a `sides` parameter, `both` by
+  default, so earlier results don't change.
+- `atlas_engine/features/sessions.py` and `setups/base.py`: the Friday entry
+  cut-off can be `None` for intraday strategies.
+- `atlas_research/backtest.py`: `rr: null` is allowed when every signal
+  carries a time exit.
+- `atlas_research/t0.py`:
+  - a strategy may override the edge filters (`filters:`);
+  - `benchmark: buy_and_hold` adds the exposure-matched buy-and-hold gate
+    (`buy_and_hold_r`).
+
+Reproduce:
+
+```bash
+for s in mes_intraday_momentum_m30 mes_overnight_drift_h1 mes_channel_breakout_long_h4 mes_opening_gap_m30; do
+  atlas-research --config atlas_research/configs/mes.yaml t0 run $s
+done
 ```

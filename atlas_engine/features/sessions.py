@@ -46,8 +46,10 @@ def after_open_blackout(index: pd.DatetimeIndex, minutes: int = 15) -> np.ndarra
     return ((lon >= 480) & (lon < 480 + minutes)) | ((ny >= 480) & (ny < 480 + minutes))
 
 
-def friday_cutoff(index: pd.DatetimeIndex, cutoff_utc: str) -> np.ndarray:
-    """True from ``cutoff_utc`` on Friday until the weekend close."""
+def friday_cutoff(index: pd.DatetimeIndex, cutoff_utc: str | None) -> np.ndarray:
+    """True from ``cutoff_utc`` on Friday until the weekend close; never when ``cutoff_utc`` is None."""
+    if cutoff_utc is None:
+        return np.zeros(len(index), bool)
     mins = (index.hour * 60 + index.minute).to_numpy()
     return (index.weekday.to_numpy() == 4) & (mins >= _hhmm(cutoff_utc))
 

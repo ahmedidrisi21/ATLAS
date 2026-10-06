@@ -197,3 +197,13 @@ def test_exit_slippage_hits_time_exits_but_not_targets():
     t = simulate(signal(1, 1.0991), m1, slip).iloc[0]
     assert t["exit_reason"] == "target" and t["exit"] == pytest.approx(t["target"])
     assert slip.with_spread(2.0).exit_slippage == 0.0001
+
+
+def test_time_exit_alone_can_close_trades_without_a_target():
+    m1 = path([(1.1000, 1.1030, 1.0998, 1.1001), (1.1001, 1.1003, 1.1000, 1.1002), (1.1004, 1.1005, 1.1003, 1.1004)])
+    sig = signal(1, 1.0991).assign(exit_by=[T0 + pd.Timedelta(minutes=2)])
+    t = simulate(sig, m1, NO_COSTS, ExitPolicy(rr=None, friday_flatten_utc=None)).iloc[0]
+    assert t["exit_reason"] == "time_exit" and pd.isna(t["target"])  # the 1.1030 high would have been a 2R target
+    assert t["r_gross"] == pytest.approx((1.1004 - SPREAD / 2 - (1.1000 + SPREAD / 2)) / t["risk"])
+    with pytest.raises(ValueError, match="nothing would ever close"):
+        simulate(signal(1, 1.0991), m1, NO_COSTS, ExitPolicy(rr=None, friday_flatten_utc=None))

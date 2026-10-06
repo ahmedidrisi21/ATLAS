@@ -14,7 +14,8 @@
 - Optional ATR trail (PRD §18): once the best price since entry is
   ``atr_trail_after_r`` R in profit, the stop moves to best - mult x ATR at
   each decision-bar close, using only closed bars; it only ever tightens and
-  applies from the next minute. ``rr=None`` removes the fixed target.
+  applies from the next minute. ``rr=None`` removes the fixed target; then a
+  trail, a Friday flatten or an ``exit_by`` on every signal must close trades.
 - A signal may carry ``exit_by``: the trade closes at market at the first bar
   at/after that time if neither stop nor target has been hit (time exit).
 """
@@ -112,8 +113,9 @@ def simulate(
         return pd.DataFrame(columns=TRADE_COLS)
     if exits.atr_trail_mult and trail is None:
         raise ValueError("an ATR trail needs the decision-bar TrailFrame")
-    if exits.rr is None and not (exits.atr_trail_mult or exits.friday_flatten_utc):
-        raise ValueError("no target, trail or flatten: nothing would ever close the trade")
+    timed = "exit_by" in signals and pd.to_datetime(signals["exit_by"], utc=True).notna().all()
+    if exits.rr is None and not (exits.atr_trail_mult or exits.friday_flatten_utc or timed):
+        raise ValueError("no target, trail, flatten or time exit: nothing would ever close the trade")
     p = path or M1Path(m1, costs.spread_mult)
     fri = p.friday_after(exits.friday_flatten_utc) if exits.friday_flatten_utc else None
     n = len(p.t)

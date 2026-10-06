@@ -101,3 +101,69 @@ strategies:
     grid:
       adx_min: [20, 25]
       pullback_bars: [4, 8]
+
+  # MES round 2 (declared 2026-10-06, after round 1's results and before any
+  # round-2 run). Published index effects, not ideas fitted to round 1, except
+  # the long-only channel breakout, which round 1's long/short split suggested
+  # and which is therefore held to the extra buy-and-hold benchmark below.
+  # Gates are the unchanged T0 gates above. Grids are at most 4 points and are
+  # fixed; the stops are fixed (not gridded) because for a time-exit trade the
+  # stop sets 1R and position size, and gridding it would rescale R.
+  #
+  # Time-exit strategies (no profit target, rr: null): R = direction x (exit -
+  # entry) / (entry - stop) minus costs / (entry - stop), where the stop is the
+  # declared protective stop that would size the position. ``benchmark:
+  # buy_and_hold`` adds one gate: average R after costs minus the R that
+  # holding the S&P long for the same hours would have earned on the same
+  # risk (mean log return per calendar hour over the same OOS windows, no
+  # costs) must be > 0.
+  mes_intraday_momentum_m30:
+    setup: intraday_momentum
+    bar: 30min
+    hypothesis: "Gao, Han, Li & Zhou (2018): the S&P 500 return from the prior close (or the 09:30 New York open) to 10:00 New York predicts the sign of the last half hour; trading 15:30 New York to the close in that direction pays after futures costs."
+    symbols: [MES]
+    exits:
+      rr: null                   # time exit only (plus the protective stop)
+      friday_flatten_utc: null   # the trade closes by 16:00 New York the same day
+    filters:
+      friday_no_entry_after_utc: null   # intraday: nothing is held over the weekend, so Friday afternoons trade too
+    grid:
+      signal_from: [prev_close, open]   # first-half-hour return measured from the prior 16:00 close, or from 09:30
+      exit_at: ["16:00", "15:55"]       # New York
+    # fixed: signal_end 10:00, entry_at 15:30 New York, stop 2.0 x M30 ATR(14) from the 15:30 close
+  mes_overnight_drift_h1:
+    setup: overnight_drift
+    bar: 1h
+    hypothesis: "The overnight drift (Cooper, Cliff & Gulen 2008; Boyarchenko, Larsen & Whelan 2023): S&P 500 returns accrue mostly outside US cash hours, so a long held from the 16:00 New York close to the next 09:30 open (or to 04:00, after the European open) earns more than buy-and-hold for the same hours, after futures costs."
+    symbols: [MES]
+    benchmark: buy_and_hold
+    exits:
+      rr: null
+      friday_flatten_utc: null   # Friday entries are already refused by the unchanged 18:00 UTC Friday entry filter: no weekend holds
+    grid:
+      exit_at: ["09:30", "04:00"]       # next trading day, New York
+    # fixed: entry_at 16:00 New York (H1 close), long only, stop 3.0 x H1 ATR(14) from the 16:00 close
+  mes_channel_breakout_long_h4:
+    setup: channel_breakout
+    bar: 4h
+    hypothesis: "Long-only H4 channel breakout on the S&P 500 (a new hypothesis, suggested by round 1's long/short split): upside breakouts pay 2R after futures costs by more than exposure-matched buy-and-hold and random long entries."
+    symbols: [MES]
+    benchmark: buy_and_hold
+    grid:
+      channel: [20, 55]
+      sl_atr: [1.5, 2.5]
+      sides: [long]
+  mes_opening_gap_m30:
+    setup: opening_gap
+    bar: 30min
+    hypothesis: "The overnight gap of the S&P 500 (prior 16:00 close to 09:30 New York) is faded, or followed, in the first hour or over the session often enough to pay after futures costs."
+    symbols: [MES]
+    exits:
+      rr: null
+      friday_flatten_utc: null   # intraday
+    filters:
+      friday_no_entry_after_utc: null
+    grid:
+      mode: [fade, follow]
+      exit_at: ["10:30", "15:55"]       # New York, same day
+    # fixed: entry at 09:30 New York (M30 close), any non-zero gap, stop 4.0 x M30 ATR(14) from the 09:30 close

@@ -214,3 +214,20 @@ def test_every_question_and_threshold_lives_in_one_file_and_every_state_field_is
     assert set(jev_adapter.REQUEST_KEYS) <= set(STATE_FIELDS)
     for q in QUESTIONS.values():
         assert q["instructions"]["question"].endswith("?") and q["instructions"]["fields"] is STATE_FIELDS
+
+
+
+def test_behind_a_proxy_that_adds_the_key_no_key_is_needed_or_sent():
+    """A Claude cloud environment can hold the key as a Bearer credential that its proxy adds to each request."""
+    assert TypeSafeTransport.from_env(env={"ATLAS_TYPESAFE_PROXY_AUTH": "0"}) is None
+    t = TypeSafeTransport.from_env(env={"ATLAS_TYPESAFE_PROXY_AUTH": "1"})
+    assert t.proxy_auth and t.api_key == ""
+    post = FakePost()
+    t.post = post
+    res = JevAdapter(t, MODEL, live=True).evaluate_setup("trend_pullback:1", STATE, 2.0, 0.08)
+    assert isinstance(res, JevResult)
+    assert "Authorization" not in post.calls[0][2]
+    # a key on the host still wins over the switch
+    assert TypeSafeTransport.from_env(env={"TYPESAFE_API_KEY": "k", "ATLAS_TYPESAFE_PROXY_AUTH": "1"}).api_key == "k"
+    with pytest.raises(ValueError):
+        TypeSafeTransport("")

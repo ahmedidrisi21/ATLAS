@@ -19,7 +19,9 @@ model other than the pinned one, so an alias moving to a new release can't
 change answers silently.
 
 The API key comes only from the engine host's environment
-(``TYPESAFE_API_KEY``), never from the repository, a profile or a skill. There
+(``TYPESAFE_API_KEY``), never from the repository, a profile or a skill. In a
+Claude cloud environment that holds the key as a Bearer credential, the proxy
+adds the header and ``ATLAS_TYPESAFE_PROXY_AUTH=1`` tells ATLAS to send none. There
 is no retry: a 429, a 529 or a slow answer is a skip and the trade is
 rejected, as PRD v3 §25 asks.
 """
@@ -37,6 +39,9 @@ from .questions import REGIME_UNCERTAIN
 
 ENDPOINT = "https://api.typesafe.ai/v1/systemone"
 API_KEY_ENV = "TYPESAFE_API_KEY"
+# Set to 1 where an outbound proxy adds the Authorization header itself (a Claude cloud environment holding
+# the key as a Bearer credential for api.typesafe.ai): the key never enters the process, so none is sent.
+PROXY_AUTH_ENV = "ATLAS_TYPESAFE_PROXY_AUTH"
 DEFAULT_MODEL = "jev-1.13.0"  # pinned; jev-latest is refused live by the adapter
 
 class TypeSafeError(RuntimeError):
@@ -54,23 +59,29 @@ def _urllib_post(url: str, body: bytes, headers: dict, timeout_s: float) -> tupl
 
 @dataclass
 class TypeSafeTransport:
-    api_key: str = field(repr=False)
+    api_key: str = field(repr=False)  # "" only with proxy_auth
     timeout_s: float = 0.5
     url: str = ENDPOINT
     post: Callable[[str, bytes, dict, float], tuple[int, bytes]] = _urllib_post
     usage: dict = field(default_factory=lambda: {"requests": 0, "input_tokens": 0, "output_tokens": 0})
+    proxy_auth: bool = False
 
     def __post_init__(self):
-        if not self.api_key:
+        if not self.api_key and not self.proxy_auth:
             raise ValueError(f"no TypeSafe API key; set {API_KEY_ENV} on the engine host")
         if not self.url.startswith("https://"):
             raise ValueError("the TypeSafe endpoint must be https")
 
     @classmethod
     def from_env(cls, timeout_s: float = 0.5, env: dict | None = None) -> "TypeSafeTransport | None":
-        """A transport when the host has a key, else ``None`` (Jev stays unloaded)."""
-        key = (env if env is not None else os.environ).get(API_KEY_ENV, "").strip()
-        return cls(key, timeout_s) if key else None
+        """A transport when the host has a key (or a proxy that adds it), else ``None`` (Jev stays unloaded)."""
+        env = env if env is not None else os.environ
+        key = env.get(API_KEY_ENV, "").strip()
+        if key:
+            return cls(key, timeout_s)
+        if env.get(PROXY_AUTH_ENV, "").strip() == "1":
+            return cls("", timeout_s, proxy_auth=True)
+        return None
 
     def body(self, request: dict) -> dict:
         return {"state": request["state"], "model": request["model_version"],
@@ -78,7 +89,9 @@ class TypeSafeTransport:
 
     def __call__(self, request: dict) -> dict:
         payload = json.dumps(self.body(request)).encode()
-        headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
         status, raw = self.post(self.url, payload, headers, self.timeout_s)
         if status != 200:
             raise TypeSafeError(f"http_{status}")

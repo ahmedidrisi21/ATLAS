@@ -15,7 +15,7 @@ metadata:
 
 ## Objective
 
-Make one well-reasoned decision per session on the MT5 demo account: open a trade, manage an open one, or stand aside. Every trade carries a stop, a target, a confidence and a written thesis, so the record can show whether your judgement beats costs.
+Make one well-reasoned decision per session on the demo account (MT5, or NinjaTrader's simulated account trading MES in the demo practice run, docs/demo-practice.md): open a trade, manage an open one, or stand aside. Every trade carries a stop, a target, a confidence and a written thesis, so the record can show whether your judgement beats costs.
 
 ## When to use
 
@@ -35,7 +35,7 @@ Don't use for: backtests or research on history (you may already know what happe
 2. `my_track_record()` and `list_my_positions()`. Note your expectancy, your calibration (Brier against the base rate) and how many intents you have left today. If your last five trades share a mistake, name it before going on.
 3. For each open position: `get_live_market` on its symbol. If the thesis that opened it is broken, `close_my_position(ticket, reason)`. If price has moved well in your favour and a nearby level now protects it, you may `tighten_stop(ticket, new_stop, reason)`. Otherwise leave it: the broker holds its stop and target.
 4. Read the market: `get_live_market(symbols, "D1", 60)`, then `"H4"` and `"H1"` for the symbols that look interesting. Note the spread now against its median.
-5. Read the news with web search: today's economic calendar (high-impact releases in the next 2 hours on the currencies you're looking at), central-bank news, and anything moving the dollar, euro or pound. Write down the sources you used.
+5. Read the news with web search: today's economic calendar (high-impact releases in the next 2 hours on the currencies you're looking at, or US releases for MES), central-bank news, and anything moving the dollar, euro or pound (for MES: the S&P 500 and the Fed). On MES the engine closes every position at 14:55 Chicago, so plan a target it can reach before then. Write down the sources you used.
 6. Decide. Trade only when all of these hold:
    - You can say in two sentences why price should reach the target before the stop, and what would prove you wrong.
    - No high-impact release on either currency in the next 30 minutes.

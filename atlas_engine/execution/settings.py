@@ -19,7 +19,7 @@ from atlas_engine.config import ConfigError
 EXECUTION_KEYS = {"max_deviation_points", "reconcile_interval_s", "magic_base", "orphan_policy", "server_tz",
                   "server_offset_hours", "request_budget_share", "require_watchdog", "watchdog_heartbeat_file",
                   "commission_per_lot", "platform", "contracts", "roll_days", "entry_cutoff_min", "flatten_lead_min",
-                  "no_trade_days", "broker_poll_s"}
+                  "no_trade_days", "broker_poll_s", "demo_only"}
 FILTER_KEYS = {"max_spread_to_stop_ratio", "news_blackout_min", "rollover_blackout_ny", "friday_flatten_utc"}
 ORPHAN_POLICIES = {"close", "attach_sl"}
 PLATFORM_NAMES = {"mt5", "ninjatrader"}
@@ -54,6 +54,7 @@ class ExecutionSettings:
     flatten_lead_min: int = 10
     no_trade_days: tuple[str, ...] = ()  # extra exchange no-trade dates (YYYY-MM-DD) on top of the rule set
     broker_poll_s: float = 5.0  # futures REST adapters: reuse a read this long (rate limits)
+    demo_only: bool = False  # true: the pipeline refuses every proposal unless the broker reports a demo account
     defaults_used: tuple[str, ...] = ()
 
     def to_dict(self) -> dict:
@@ -92,6 +93,7 @@ def load_execution_settings(root: str | Path = "config") -> ExecutionSettings:
          "execution.flatten_lead_min <= execution.entry_cutoff_min <= 240"),
         (1 <= s.broker_poll_s <= 60, "execution.broker_poll_s must be in 1..60"),
         (s.contracts is None or isinstance(s.contracts, dict), "execution.contracts must map product roots to contracts"),
+        (isinstance(s.demo_only, bool), "execution.demo_only must be true or false"),
     ]
     bad = [m for ok, m in checks if not ok]
     if bad:

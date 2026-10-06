@@ -19,7 +19,8 @@ only monitors. The file format:
     magic_offset: 1              # magic = execution.magic_base + this (0..999)
     exit: {rr: 2.0}              # fixed target in R until T1 picks an exit policy
     decision:                    # PRD v3 §8: the strategy's decision model (optional)
-      model: rules               # rules | gbm | jev; default rules
+      model: rules               # rules | gbm | jev | practice; default rules. practice: a machinery
+                                 # test on a demo account only (atlas_engine.models.practice)
       p_target_first: 0.42       # rules prior: the validated out-of-sample hit rate. Without one,
                                  # every trade of this strategy is rejected (no estimate, no guess).
 
@@ -34,6 +35,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
+import numpy as np
 import pandas as pd
 import yaml
 
@@ -72,8 +74,12 @@ class SignalSource(Protocol):
 
 def m1_frame(rates, clock) -> pd.DataFrame:
     """MT5 M1 rates (bid OHLC + spread in points) as a bid/ask bar frame indexed by UTC open time.
-    MT5 reports one spread per bar, so the ask side is the bid shifted by it."""
-    idx = pd.DatetimeIndex([clock.to_utc(int(t)) for t in rates["time"]], name="time")
+    MT5 reports one spread per bar, so the ask side is the bid shifted by it. ``clock`` None: the times are UTC
+    epoch seconds already (futures venues have no broker server clock)."""
+    if clock is None:
+        idx = pd.DatetimeIndex(pd.to_datetime(np.asarray(rates["time"], dtype="int64"), unit="s", utc=True), name="time")
+    else:
+        idx = pd.DatetimeIndex([clock.to_utc(int(t)) for t in rates["time"]], name="time")
     df = pd.DataFrame(index=idx)
     return df.assign(**{f"bid_{c}": rates[k] for c, k in zip("ohlc", ("open", "high", "low", "close"))},
                      volume=rates["tick_volume"].astype(float))
@@ -111,6 +117,10 @@ class SetupSource:
                 m1[f"ask_{c}"] = m1[f"bid_{c}"].to_numpy() + spread
             m1 = m1[BAR_COLS]
             m1 = m1[m1.index + pd.Timedelta(minutes=1) <= pd.Timestamp(now)]  # drop the forming bar
+            grace = float(getattr(broker, "bar_grace_s", 0) or 0)
+            last_due = closed - pd.Timedelta(minutes=1)  # the 1-minute bar that ends at this close
+            if grace and (m1.empty or m1.index[-1] < last_due) and (pd.Timestamp(now) - closed).total_seconds() < grace:
+                continue  # the platform has not served the closing bar yet: ask again next step
             self.last_bar[sym] = closed
             if len(m1) < 1000:
                 continue
@@ -127,7 +137,7 @@ class SetupSource:
         return out
 
 
-DECISION_MODELS = {"rules", "gbm", "jev"}
+DECISION_MODELS = {"rules", "gbm", "jev", "practice"}
 
 
 def decision_config(sources: list[SetupSource]) -> tuple[dict[str, float], dict[str, str]]:

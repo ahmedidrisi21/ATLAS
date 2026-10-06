@@ -33,7 +33,12 @@ Where it differs from the REST adapter, and what ATLAS does about it:
   are ATLAS's own reduce-only market orders.
 - Quotes on an account without a CME data subscription are delayed (~10 minutes; ``dataFeedMode: Delayed``).
   The decision pipeline refuses a quote older than ``decision.max_quote_age_s``, so no trade is priced on one.
-- Bars (``market_history``) are NOT wired: the engine's bar path is built for MT5's server clock.
+- Bars come from ``market_history`` (1-minute, trade prices, timestamps at the bar start, UTC). ``m1_rates``
+  turns them into the engine's M1 rows quoted at a one-tick spread around the traded price (bid half a tick
+  below, ask half a tick above), the same quoting the MES research used (``atlas_research.data.quoted_at_spread``).
+  At most ``MAX_HISTORY_BARS`` per call: the server's own limit is not documented, so this is kept small.
+  A bar that closed seconds ago may not be served yet, so ``bar_grace_s`` tells the signal sources to wait
+  that long for it before deciding on a 15-minute close without it.
 """
 
 from __future__ import annotations
@@ -42,7 +47,9 @@ import datetime as dt
 import time
 import zlib
 
-from atlas_engine.adapters.broker import AccountInfo, Tick
+import numpy as np
+
+from atlas_engine.adapters.broker import AccountInfo, BrokerUnavailable, Tick
 from atlas_engine.adapters.futures_venue import FuturesVenue, VenueAck, VenueFill, VenueOrder
 from atlas_engine.adapters.orders import OrderRequest
 from atlas_engine.futures import FuturesContract, parse_contract, product
@@ -61,6 +68,9 @@ TIF = {"DAY": "Day", "GTC": "GTC"}
 # CME equity-index futures stop trading at 09:30 New York on the expiration date; the platform gives the date
 # only, so ATLAS takes 13:30 UTC (the earlier of the EDT/EST times) as the last trade.
 LAST_TRADE_UTC = dt.time(13, 30)
+MAX_HISTORY_BARS = 5000  # about 3.5 days of 1-minute bars; enough for the 15-minute setups' features
+RATE_FIELDS = [("time", "i8"), ("open", "f8"), ("high", "f8"), ("low", "f8"), ("close", "f8"),
+               ("tick_volume", "f8"), ("spread", "f8")]
 
 
 def _time(s: str | None) -> dt.datetime | None:
@@ -70,6 +80,7 @@ def _time(s: str | None) -> dt.datetime | None:
 class NinjaTraderMcpAdapter(FuturesVenue):
     platform = "ninjatrader"
     data_source = "ninjatrader-mcp"
+    bar_grace_s = 90.0  # wait this long after a 15-minute close for its last 1-minute bar to be served
 
     def __init__(self, client: McpClient, contracts: dict[str, str], account_name: str | None = None,
                  ledger_path=None, commission_per_contract: dict | None = None, poll_s: float = 5.0,
@@ -173,6 +184,25 @@ class NinjaTraderMcpAdapter(FuturesVenue):
             return self._cached(f"quote:{contract}", self.quote_s, snap)
         except (KeyError, TypeError, ValueError, AttributeError) as e:
             raise NinjaTraderError(f"malformed quote from the platform ({type(e).__name__})") from None
+
+    def m1_rates(self, symbol: str, count: int):
+        """The last ``count`` (at most ``MAX_HISTORY_BARS``) 1-minute bars of the pinned contract, oldest first,
+        as M1 rows in UTC epoch seconds: bid OHLC half a tick under the traded price, ``spread`` one tick."""
+        contract = self.contract_of(symbol)
+        n = int(min(max(count, 1), MAX_HISTORY_BARS))
+        r = self._call("market_history", {"symbol": contract, "barType": "Minute", "barSize": 1, "count": n})
+        bars = r.get("bars")
+        if not isinstance(bars, list) or not bars:
+            raise BrokerUnavailable(f"no 1-minute bars for {contract}")
+        tick = product(self.root_of(contract)).tick_size
+        try:
+            rows = sorted((int(_time(b["timestamp"]).timestamp()), float(b["open"]) - tick / 2,
+                           float(b["high"]) - tick / 2, float(b["low"]) - tick / 2, float(b["close"]) - tick / 2,
+                           float((b.get("upVolume") or 0) + (b.get("downVolume") or 0)), 1.0) for b in bars)
+        except (KeyError, TypeError, ValueError, AttributeError) as e:
+            raise BrokerUnavailable(f"malformed bars from the platform ({type(e).__name__})") from None
+        self.bars_feed_mode = r.get("dataFeedMode")
+        return np.array(rows, dtype=RATE_FIELDS)
 
     def _orders(self) -> list[VenueOrder]:
         try:

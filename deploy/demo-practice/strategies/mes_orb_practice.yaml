@@ -1,0 +1,19 @@
+# MACHINERY TEST, NOT A STRATEGY EXPECTED TO PROFIT.
+# The MES opening-range breakout failed its backtest: -0.012R a trade after costs over 1,353 out-of-sample
+# trades (docs/mes-candidates.md). It is used here because it trades at most once a day and closes the same
+# day, so it exercises entries, brackets, stops, targets and the 15:55 New York close often.
+#
+# decision.model: practice states the break-even probability so the trade reaches risk, sizing and execution.
+# It is not an estimate, and the engine accepts it on a demo account only (atlas_engine/models/practice.py).
+
+setup: opening_range_breakout
+version: "practice-1"
+enabled: true
+symbols: [MES]
+params:                        # the parameters the backtest chose: 15-minute range, stop at the far edge
+  range_minutes: 15
+  sl_range_frac: 1.0
+magic_offset: 1
+exit: {rr: 2.0}                # target at 2R; otherwise the 14:55 Chicago close (the backtest's 15:55 New York)
+decision:
+  model: practice

@@ -9,6 +9,7 @@
                                          --operator yahye --reason "reviewed the incident, all clear"
     atlas-engine show --state /srv/atlas/engine
     atlas-engine scorecard --state /srv/atlas/engine
+    atlas-engine practice-report --state /srv/atlas/engine    # the demo practice run (docs/demo-practice.md)
 
 The API serves the same five operations routes as ``atlas-engine-sim`` (H3),
 so the Hermes side (atlas-operations, cron checks, dashboard) works unchanged
@@ -27,7 +28,7 @@ the engine's inbox, never API calls.
                     picks the account when the login has several.
     ninjatrader-mcp  NinjaTrader's MCP server, demo only: the free route (no funded account or API add-on).
                     Sign in first with ``atlas-engine ninjatrader-mcp login --state <dir>``; the sign-in is
-                    kept in the state directory.
+                    kept in the state directory. ``ninjatrader-mcp preflight`` checks for live quotes and bars.
     fake-ninjatrader  the in-process NinjaTrader API stand-in, for drills (alias fake-tradovate)
 
 The fakes use no network, no broker and send no orders anywhere.
@@ -89,6 +90,8 @@ def build_engine(args):
     if settings.platform != platform:
         raise SystemExit(f"--broker {args.broker} needs execution.platform: {platform} in atlas.yaml "
                          f"(it says {settings.platform})")
+    if settings.demo_only and broker == "ninjatrader" and os.environ.get("ATLAS_NINJATRADER_ENV", "demo") != "demo":
+        raise SystemExit("this config is demo only (execution.demo_only: true); ATLAS_NINJATRADER_ENV must be demo")
     state = Path(args.state)
     clock = ServerClock(settings.server_tz, settings.server_offset_hours)
     if platform == "ninjatrader":
@@ -122,7 +125,7 @@ def build_engine(args):
     # GBM loads here once one has been trained and kept by T2 (PRD v3 §23). A strategy that names a model that
     # isn't loaded gets no estimate, so its trades are rejected rather than run on rules by default.
     models = ModelRegistry.default(priors, assignment, timeout_ms=decision.model_timeout_ms,
-                                   extra=load_jev(assignment, decision, state))
+                                   extra=load_jev(assignment, decision, state) + practice_models(assignment, decision))
     return TradingEngine(cfg, settings, adapter, journal, state, sources=sources,
                          alerts=AlertOutbox(state / "alerts.jsonl"), operator_key=key,
                          watchdog=watchdog, broker_label=label, agent=load_agent_settings(args.config),
@@ -173,7 +176,8 @@ def ninjatrader_venue(broker: str, cfg, settings, state: Path, env: dict | None 
 
 
 def ninjatrader_mcp(args, stdin=None, out=print) -> None:
-    """``atlas-engine ninjatrader-mcp login|check|capture``: the demo account through NinjaTrader's MCP server."""
+    """``atlas-engine ninjatrader-mcp login|check|capture|preflight``: the demo account through NinjaTrader's MCP
+    server. ``preflight`` (read-only) says whether the quotes are live and how many 1-minute bars the server gives."""
     from atlas_engine.adapters.ninjatrader import mcp
 
     state = Path(args.state)
@@ -198,12 +202,52 @@ def ninjatrader_mcp(args, stdin=None, out=print) -> None:
             info = client.initialize()
             portfolio = client.call("my_portfolio")
             out(json.dumps({"server": info.get("serverInfo", {}), "portfolio": portfolio}, indent=2, default=str))
+        elif args.action == "preflight":
+            out(json.dumps(preflight(mcp.McpClient(oauth), args.contract), indent=2))
         else:
             summary = mcp.capture(mcp.McpClient(oauth), state / "ninjatrader-mcp-capture")
             out(json.dumps(summary, indent=2))
             out(f"answers saved under {state / 'ninjatrader-mcp-capture'} (no tokens in them)")
     except mcp.McpError as e:
         raise SystemExit(str(e)) from None
+
+
+def practice_models(assignment: dict, decision) -> list:
+    """The demo-only practice model, when a strategy is assigned to it (a machinery test, docs/demo-practice.md)."""
+    if "practice" not in assignment.values():
+        return []
+    from atlas_engine.models import PracticeModel
+
+    log.warning("a strategy is assigned to the practice model: a machinery test, demo account only, not an estimate")
+    return [PracticeModel(decision.ev_min_r)]
+
+
+def preflight(client, contract: str, now: dt.datetime | None = None) -> dict:
+    """Read-only checks before the practice run: is the market data live (not the free 10-minute delayed feed),
+    and does ``market_history`` serve enough 1-minute bars for the 15-minute setups? Places nothing."""
+    from atlas_engine.adapters.ninjatrader.mcp_venue import MAX_HISTORY_BARS, _time
+
+    now = now or dt.datetime.now(dt.timezone.utc)
+    snap = client.call("market_snapshot", {"symbols": [contract]}) or {}
+    q = next((r for r in snap.get("snapshots") or [] if r.get("symbol") == contract), {})
+    ts = _time(q.get("timestamp")) if q.get("timestamp") else None
+    hist = client.call("market_history", {"symbol": contract, "barType": "Minute", "barSize": 1,
+                                          "count": MAX_HISTORY_BARS}) or {}
+    bars = hist.get("bars") or []
+    live = q.get("dataFeedMode") == "RealTime"
+    out = {"contract": contract, "quote_feed": q.get("dataFeedMode"), "bars_feed": hist.get("dataFeedMode"),
+           "quote_age_s": round((now - ts).total_seconds(), 1) if ts else None,
+           "bars_returned": len(bars), "bars_asked": MAX_HISTORY_BARS,
+           "first_bar": bars[0].get("timestamp") if bars else None, "last_bar": bars[-1].get("timestamp") if bars else None}
+    problems = []
+    if not live:
+        problems.append("quotes are not RealTime: buy NinjaTrader's real-time CME data for this account, or every "
+                        "trade is refused with quote_not_live")
+    if len(bars) < 1000:
+        problems.append("fewer than 1,000 one-minute bars: the opening-range rule needs at least 1,000 to decide")
+    out["ready"], out["problems"] = not problems, problems
+    out["note"] = "quote age is only meaningful while the market is open"
+    return out
 
 
 def load_jev(assignment: dict, decision, state: Path, env: dict | None = None) -> list:
@@ -273,9 +317,14 @@ def main(argv: list[str] | None = None) -> None:
     c = sub.add_parser("scorecard", help="closed trades in R after costs by setup, and Hermes's verdict")
     c.add_argument("--state", required=True)
 
+    pr = sub.add_parser("practice-report", help="the demo practice run's machinery report card (docs/demo-practice.md)")
+    pr.add_argument("--state", required=True)
+    pr.add_argument("--json", action="store_true", help="the full report as JSON instead of plain words")
+
     n = sub.add_parser("ninjatrader-mcp", help="sign in to the NinjaTrader demo through its MCP server, check it, "
                                                "or record its answers (read-only)")
-    n.add_argument("action", choices=["login", "check", "capture"])
+    n.add_argument("action", choices=["login", "check", "capture", "preflight"])
+    n.add_argument("--contract", default="MESZ6", help="preflight: the contract to check (default MESZ6)")
     n.add_argument("--state", required=True, help="engine state directory; the sign-in is saved there (mode 600)")
     n.add_argument("--port", type=int, default=0, help="login: local port the browser returns to (default: any free)")
     n.add_argument("--paste", action="store_true",
@@ -322,6 +371,14 @@ def main(argv: list[str] | None = None) -> None:
         intents = {r["intent_id"]: r for r in j.rows("agent_actions", 100_000)
                    if r.get("action") == "submit_trade_intent" and r.get("intent_id")}
         print(json.dumps(scorecard(j.rows("trades", 100_000), intents), indent=2))
+    elif args.cmd == "practice-report":
+        from atlas_engine.journal import Journal
+        from atlas_engine.journal.practice import practice_report, render
+        db = Path(args.state) / "journal.db"
+        if not db.exists():
+            raise SystemExit(f"no journal at {db}: has the engine run with this --state?")
+        rep = practice_report(Journal(db, "practice-report"))
+        print(json.dumps(rep, indent=2, default=str) if args.json else render(rep))
     elif args.cmd == "ninjatrader-mcp":
         ninjatrader_mcp(args)
     elif args.cmd == "run":

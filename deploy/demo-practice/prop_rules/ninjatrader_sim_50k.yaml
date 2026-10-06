@@ -1,0 +1,41 @@
+# No prop firm: NinjaTrader's simulated (demo) account, $50,000 of play money, for the demo practice run
+# (docs/demo-practice.md). These are ATLAS's own practice limits written in the prop-rule format, so the
+# engine's risk and session machinery runs exactly as it would under a firm.
+
+firm: None (NinjaTrader simulation)
+program: Demo practice 50K
+checked: "2026-10-06"
+
+daily_loss:
+  pct: 2.0                     # $1,000 a day
+  base: initial_balance
+  reference: day_start_balance
+  includes_floating: true
+  reset_time: "17:00"          # CME's trading day rolls at 17:00 Chicago
+  reset_tz: America/Chicago
+
+max_loss:
+  pct: 6.0                     # $3,000 from the start
+  type: static
+
+phases:
+  practice: {profit_target_pct: null, min_trading_days: 0}
+
+trading_day: position_opened
+
+restrictions:
+  evaluation: {news_window_min: null, weekend_holding: false, max_market_break_hours: null}
+  funded: {news_window_min: null, weekend_holding: false, max_market_break_hours: null}
+
+futures:
+  products: [MES]
+  contract_limit: {minis: 0.2, micros_per_mini: 10}  # 2 MES in total across every source
+  tz: America/Chicago
+  flat_by: "15:05"             # with flatten_lead_min 10, ATLAS closes at 14:55 Chicago = 15:55 New York
+  reopen: "17:00"
+  hedging_correlated: false
+  min_bracket_ticks: 0
+
+max_lot: 1                     # 1 MES per trade, whichever source (the opening-range rule or Hermes)
+eas_allowed: true
+max_server_requests_per_day: null

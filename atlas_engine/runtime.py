@@ -452,7 +452,7 @@ class TradingEngine:
                           account_currency=self.cfg.currency,
                           already_handled=self.book.by_client_id(cid) is not None or cid in self.intents,
                           market_open=open_, market_closed_reason=closed_why, session=session,
-                          roll_days=self.settings.roll_days)
+                          roll_days=self.settings.roll_days, demo_only=self.settings.demo_only)
             d = self.pipeline.evaluate(intent, ctx)
             self._drain_risk_events()
             self._stage_events(d.stages, now, did)

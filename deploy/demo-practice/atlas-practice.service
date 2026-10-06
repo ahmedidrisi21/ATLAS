@@ -1,0 +1,25 @@
+# Optional: keeps the practice engine running on a Linux computer or VPS, and restarts it after a reboot
+# (docs/demo-practice.md, "Start"). Install as a user service:
+#
+#   mkdir -p ~/.config/systemd/user && cp deploy/demo-practice/atlas-practice.service ~/.config/systemd/user/
+#   loginctl enable-linger "$USER"          # keep it running when you are logged out
+#   systemctl --user daemon-reload && systemctl --user enable --now atlas-practice
+#
+# Paths assume the repo in ~/ATLAS with its virtualenv in ~/ATLAS/.venv, and the practice files in
+# ~/atlas-practice. Nothing secret is in this file: the NinjaTrader sign-in stays in the state directory.
+
+[Unit]
+Description=ATLAS demo practice engine (NinjaTrader simulated account, MES)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+WorkingDirectory=%h/ATLAS
+ExecStart=%h/ATLAS/.venv/bin/atlas-engine run --broker ninjatrader-mcp \
+    --config %h/atlas-practice/config --state %h/atlas-practice/state \
+    --tokens %h/atlas-practice/engine-tokens.yaml --operator-key %h/atlas-practice/operator.key
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=default.target

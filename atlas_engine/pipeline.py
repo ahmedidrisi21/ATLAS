@@ -46,6 +46,7 @@ from atlas_engine.setups import SETUPS
 from atlas_engine.sizing.lots import risk_per_lot
 
 ALLOW, REJECT, HALT, KILL = "ALLOW", "REJECT", "HALT", "KILL"
+PRACTICE_MODEL = "practice"  # atlas_engine.models.practice: demo-only machinery tests
 AGENT_STRATEGY = "hermes"  # the one strategy name an agent may propose under (atlas_engine.agent_intents.SETUP)
 
 # T3 risk-engine reasons, filed by stage for the audit record. Anything unlisted is "risk".
@@ -132,6 +133,7 @@ class Context:
     market_closed_reason: str | None = None  # why not, from the session calendar (futures) or the FX week
     session: dict | None = None  # futures: SessionState.to_dict(), journaled with the decision
     roll_days: int = 0  # futures: refuse a contract this many days before its last trade / first notice
+    demo_only: bool = False  # execution.demo_only: refuse every proposal unless the broker reports a demo account
 
 
 @dataclass
@@ -223,6 +225,8 @@ class DecisionPipeline:
             reasons.append("journal_unavailable")  # never trade what the journal can't record (§31)
         if ctx.already_handled:
             reasons.append("decision_already_handled")
+        if ctx.demo_only and ctx.demo_account is not True:
+            reasons.append("demo_only_needs_demo_account")  # execution.demo_only: this config trades demo only
         if reasons:
             return self._fail(d, "system_state", reasons, state=state)
         return self._pass(d, "system_state", state=state)
@@ -303,6 +307,9 @@ class DecisionPipeline:
             return self._fail(d, "model", ["agent_trade_needs_demo_account"], model=self.models.model_for(i.strategy))
         if name == "agent_stated" and ctx.demo_account is not True:
             return self._fail(d, "model", ["stated_probability_needs_demo_account"], model=name)
+        if name == PRACTICE_MODEL and ctx.demo_account is not True:
+            # A machinery test's stand-in probability is not an estimate; it may only price a demo trade.
+            return self._fail(d, "model", ["practice_model_needs_demo_account"], model=name)
         model = self.models.get(name)
         if model is None:
             return self._fail(d, "model", ["model_unavailable"], model=name)

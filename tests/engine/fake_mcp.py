@@ -30,6 +30,8 @@ class FakeMcpNinjaTrader:
         self.lose_answer: set[str] = set()  # tools that act but whose answer is lost (once)
         self.legs_hidden = 0  # portfolio reads that don't show spawned legs yet
         self.status_override: dict[str, dict] = {}  # tool -> answer to return instead of acting
+        self.bars: dict[str, list[dict]] = {}  # contract -> 1-minute bars {"t": start (UTC), open, high, low, close}
+        self.feed_mode = "RealTime"
 
     # -- driving the market ---------------------------------------------------------------------------
 
@@ -75,6 +77,15 @@ class FakeMcpNinjaTrader:
             out.append({"symbol": c, "bidPrice": bid, "askPrice": ask, "lastPrice": bid, "timestamp": _iso(at),
                         "dataFeedMode": "RealTime", "tickSize": 0.25, "valuePerPoint": 5, "totalVolume": 100})
         return {"snapshots": out}
+
+    def _market_history(self, a):
+        assert a.get("barType") == "Minute" and a.get("barSize") == 1 and a.get("count")
+        now = self.now()
+        rows = [b for b in self.bars.get(a["symbol"], []) if b["t"] < now][-int(a["count"]):]  # forming bar included
+        return {"barType": "Minute", "barSize": 1, "dataFeedMode": self.feed_mode, "symbol": a["symbol"],
+                "bars": [{"timestamp": _iso(b["t"]), "open": b["open"], "high": b["high"], "low": b["low"],
+                          "close": b["close"], "upVolume": 10, "downVolume": 10, "upTicks": 5, "downTicks": 5}
+                         for b in rows]}
 
     def _positions(self) -> dict[str, tuple[int, float]]:
         net: dict[str, list] = {}

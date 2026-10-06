@@ -399,7 +399,10 @@ differs from the REST adapter:
 - No standalone linked stop and target, so a position whose legs are gone is closed and the engine HALTs.
 - `close_position` is never called (it would flatten the operator's contracts too); exits are reduce-only
   market orders. `update_risk_settings` and the alert tools are refused by the client.
-- Bars (`market_history`) are NOT wired: the engine's bar path is built for MT5's server clock.
+- Bars come from `market_history` (BUILT 2026-10-06, stand-in only): 1-minute trade prices, quoted at one
+  tick around the price as the MES research was, at most 5,000 bars a call (the server's own limit is not
+  documented). A source waits up to 90 s for a 15-minute close's last bar. The demo practice run uses them
+  (docs/demo-practice.md).
 
 ## Order lifecycle and brackets
 
@@ -570,9 +573,9 @@ Not production-ready. Each line is what must be true first.
 2. **Futures history for research.** Dukascopy is forex only. T0 can't test a
    futures strategy until a source is chosen (a CME data vendor, or
    NinjaTrader's own historical data).
-3. **Bars from NinjaTrader.** Live rule strategies need minute bars, served over
-   the WebSocket (`md/getChart`); not wired. Until then only intents with their
-   own prices (Hermes) can trade.
+3. **Bars from NinjaTrader.** Wired on the MCP route (`market_history`, 2026-10-06), so rule strategies can
+   trade the demo account there. On the REST route they still need the WebSocket (`md/getChart`), which is
+   not wired.
 4. **Session features.** Shared features still label London / New York forex
    sessions; futures strategies will want RTH / overnight labels.
 5. **CME price limits, holiday calendar, commission** (checklist above).

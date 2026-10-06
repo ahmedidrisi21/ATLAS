@@ -282,6 +282,11 @@ class FuturesExecutionAdapter:
             return ExecResult("closed", b.client_id, reason + " (already closed)", pos.ticket, attempts=0)
         req = closing_order(b.contract, b.direction, now_pos.volume, "MARKET",
                             f"{b.client_id}-X{len(b.exit_ids) + 1}")
+        try:  # the price the exit is planned at (the closing side of the quote now), for the slippage record
+            t = v.symbol_rules(pos.symbol).point
+            planned = v.tick(pos.symbol).price(b.direction, closing=True)
+        except BrokerUnavailable:
+            t = planned = None
         self._emit("order_submitted", b.client_id, request=req.to_dict(), purpose=reason)
         ack = v.submit(req)
         if ack.ok:
@@ -296,7 +301,9 @@ class FuturesExecutionAdapter:
             price = deals[-1].price if deals else None
             self._emit("position_closed", b.client_id, ticket=pos.ticket, volume=now_pos.volume, price=price,
                        reason=reason)
-            return ExecResult("closed", b.client_id, reason, pos.ticket, now_pos.volume, price, attempts=1)
+            slip = round(b.direction * (planned - price) / t, 1) if planned is not None and price is not None else None
+            return ExecResult("closed", b.client_id, reason, pos.ticket, now_pos.volume, price, planned, slip,
+                              attempts=1)
         # Still open and its stop was cancelled above: put the protection back before reporting.
         self.modify_position(left, b.stop, b.target)
         return ExecResult("failed", b.client_id, f"exit did not fill: {ack.reason or 'no fill'}", pos.ticket, attempts=1)

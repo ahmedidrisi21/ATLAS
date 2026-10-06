@@ -1,0 +1,49 @@
+# Demo practice run (docs/demo-practice.md): ATLAS trades NinjaTrader's free SIMULATED account through its
+# MCP server, to prove the machinery end to end. It is a MACHINERY TEST, not a strategy expected to profit:
+# every strategy failed its backtest (docs/mes-candidates.md).
+#
+#   atlas-engine run --broker ninjatrader-mcp --config deploy/demo-practice --state <state dir> \
+#                    --tokens <tokens file> --operator-key <key file>
+#
+# It lives in deploy/, not config/: config/ changes only by a signed operator commit (AGENTS.md).
+
+mode: paper
+phase: practice
+prop_rules: prop_rules/ninjatrader_sim_50k.yaml
+risk: risk.yaml
+
+account:
+  initial_balance: 50000         # NinjaTrader's simulated account; play money
+  currency: USD
+
+symbols: [MES]                   # Micro E-mini S&P 500 only
+
+execution:
+  platform: ninjatrader
+  demo_only: true                # the engine refuses every trade unless the broker reports a demo account
+  contracts: {MES: MESZ6}        # December 2026. Pin MESH7 before 13 Dec 2026 (roll_days ahead of the last trade)
+  roll_days: 5
+  entry_cutoff_min: 30           # no new entries after 14:35 Chicago
+  flatten_lead_min: 10           # ATLAS closes everything at 14:55 Chicago = 15:55 New York, the backtest's exit
+  require_watchdog: false        # MT5's watchdog EA has no NinjaTrader equivalent
+  broker_poll_s: 5
+  max_deviation_points: 2        # ticks the price may move between the decision and the order
+  # Round turn per contract, USD: the $1.50 the backtest charged, so live R and backtest R compare like for
+  # like. Check your own NinjaTrader commission and fees and change it if they differ (docs/demo-practice.md).
+  commission_per_lot: {MES: 1.50}
+
+filters:
+  friday_flatten_utc: null       # the daily 14:55 Chicago close already leaves nothing over the weekend
+
+decision:
+  max_quote_age_s: 30            # a quote older than this is refused (quote_not_live): the free feed is 10 min late
+  # ev_min_r stays at the PRD's +0.15R. The opening-range rule reaches it only through the demo-only practice
+  # model (strategies/mes_orb_practice.yaml); Hermes must clear it with its own stated probability.
+
+# The Hermes trader (atlas-trading profile, setup "hermes"). Demo only, sized by the engine, its own positions
+# only, stops only tighten (docs/hermes-trader.md). Switched on and off with the atlas-trading-session cron job
+# (docs/demo-practice.md); with Hermes not running, nothing arrives here and this section does nothing.
+agent_intents:
+  enabled_modes: [demo]
+  max_intents_per_day: 4
+  max_open_positions: 1          # one MES position at a time for the agent

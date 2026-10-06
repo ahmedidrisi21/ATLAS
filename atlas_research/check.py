@@ -13,7 +13,7 @@ config under ``checks:`` before its data is loaded:
         coverage: {reference_h4_bars_per_year, reference_m1_bars_per_year, min_frac, min_rth_frac}
         price_checks: {YYYY-MM-DD: published close}
         pass_rules: {min_expectancy_r, beat_buy_and_hold, beat_random_p95, min_trades, max_year_share,
-                     min_all_in_expectancy_r, beat_random_direction_p95}
+                     min_all_in_expectancy_r, beat_random_direction_p95, max_losing_years, min_profit_factor}
 
 A year whose data covers less than ``min_frac`` of either reference is
 excluded: its trades are dropped and it is left out of the benchmark windows.
@@ -21,8 +21,12 @@ excluded: its trades are dropped and it is left out of the benchmark windows.
 (optional, MNQ round 2) also excludes a year whose regular-session minutes
 (09:30-16:00 New York, trading days) are quoted less than that share. Only
 the pass rules that are declared are evaluated, lettered in the order above;
-the last two are MNQ round 2's (the 2.0 pt all-in Stress tier, and the
-review's random-direction benchmark).
+``min_all_in_expectancy_r`` and ``beat_random_direction_p95`` are MNQ round
+2's (the 2.0 pt all-in Stress tier, and the review's random-direction
+benchmark); ``max_losing_years`` (at most that many included years with an
+average R after costs <= 0) and ``min_profit_factor`` are MNQ round 3's.
+Every result also carries the share of total R made by the 10 best trades
+and the by-year table at the Stress tier.
 The run is recorded in the registry, pass or fail, as ``kind: frozen_check``.
 """
 
@@ -148,6 +152,21 @@ def year_table(trades: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows).set_index("year")
 
 
+def top_trades_share(r: np.ndarray, n: int = 10) -> float | None:
+    """Share of the total R made by the ``n`` best trades (None when the total isn't positive)."""
+    r = np.asarray(r, float)
+    total = float(r.sum())
+    if not len(r) or total <= 0:
+        return None
+    return float(np.sort(r)[::-1][:n].sum() / total)
+
+
+def losing_years(years: pd.DataFrame, included: list[int]) -> int:
+    """Included years whose average R in a ``year_table`` is not above 0; a year with no trades counts as losing."""
+    positive = set(years.index[years["expectancy_r"] > 0]) if len(years) else set()
+    return sum(1 for y in included if y not in positive)
+
+
 def max_dd_r(r: np.ndarray) -> float:
     if not len(r):
         return 0.0
@@ -242,6 +261,9 @@ def run_check(
         ("max_year_share", lambda v: ("Largest single-year share of profit", max_year_share, "<=", v)),
         ("min_all_in_expectancy_r", lambda v: ("Average R at the all-in Stress round trip", all_in_r, ">", v)),
         ("beat_random_direction_p95", lambda v: ("Average R minus random-direction p95 (R)", exp_r - rd_p95 if len(r) else 0.0, ">", 0.0)),
+        ("max_losing_years", lambda v: (f"Included years with average R <= 0 (of {len(included)})",
+                                        losing_years(years, included), "<=", v)),
+        ("min_profit_factor", lambda v: ("Profit factor", s["profit_factor"] if len(r) else 0.0, ">=", v)),
     ]
     unknown = set(rules) - {k for k, _ in candidates}
     if unknown:
@@ -304,6 +326,8 @@ def run_check(
         "t0_gates": t0_gates,
         "summary": s,
         "years": years.reset_index().to_dict("records"),
+        "years_all_in": year_table(all_in).reset_index().to_dict("records") if all_in is not None else None,
+        "top10_share_of_r": top_trades_share(r, 10),
         "coverage": {k: v.reset_index().to_dict("records") for k, v in cov.items()},
         "price_checks": prices,
         "benchmark": {"kind": "buy_and_hold", "mean_r": bh_mean},
@@ -334,6 +358,8 @@ def run_check(
         | {"summary": {k: result["summary"][k] for k in ("trades", "expectancy_r", "profit_factor", "win_rate")},
            "points": result["points"], "all_in": result["all_in"], "random_direction": result["random_direction"],
            "random_control": result["random_control"],
+           "years": [{k: y[k] for k in ("year", "trades", "expectancy_r", "total_r")} for y in result["years"]],
+           "top10_share_of_r": result["top10_share_of_r"],
            "failed_rules": [x["gate"] for x in pass_rules if not x["passed"]],
            "failed_gates": [x["gate"] + " / " + x["scope"] for x in t0_gates if x["passed"] is False]})
 

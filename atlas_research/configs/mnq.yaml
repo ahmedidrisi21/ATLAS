@@ -245,3 +245,58 @@ checks:
     price_checks: {"2018-12-31": 6329.96}
     pass_rules: {min_expectancy_r: 0.0, beat_buy_and_hold: true, beat_random_p95: true, min_trades: 150,
                  min_all_in_expectancy_r: 0.0, beat_random_direction_p95: true}
+  # ---------------------------------------------------------------------------
+  # MNQ round 3: independent check on 2013-2017 (docs/mnq-candidates.md, "Round 3
+  # declaration"). Declared and committed before any 2013-2017 backtest. Two
+  # frozen versions of mnq_noise_area_r2_m5, unchanged, each run once.
+  # Primary: k = 0.5, round 2's verdict point (whole-dev pick).
+  mnq_noise_area_r3_2013_2017_k05:
+    strategy: mnq_noise_area_r2_m5
+    params: {stop_k: 0.5}
+    period: ["2013-01-01", "2018-01-01"]   # end exclusive; data begins 2013-01-02, so no trade before late January 2013
+    coverage:                              # reused rule (MES round 3 + the 2018 check): a year below either is excluded
+      reference_m1_bars_per_year: 342192   # median full year 2019-2024 of USATECHIDXUSD (round 1 data report)
+      min_frac: 0.70
+      min_rth_frac: 0.95
+    price_checks: &r3_prices               # published Nasdaq-100 closes; > 1% off means a price-scale error
+      "2013-12-31": 3592.00
+      "2014-12-31": 4236.28
+      "2015-12-31": 4593.27
+      "2016-12-30": 4863.62
+      "2017-12-29": 6396.42
+    pass_rules: &r3_rules                  # all must pass
+      min_expectancy_r: 0.0                # (a) average R after base costs > 0
+      beat_buy_and_hold: true              # (b) > exposure-matched buy-and-hold R
+      beat_random_p95: true                # (c) > random-entry p95 (50 runs)
+      min_trades: 150                      # (d)
+      min_all_in_expectancy_r: 0.0         # (e) average R at the 2.0 pt all-in Stress tier > 0
+      beat_random_direction_p95: true      # (f) > random-direction p95 (50 runs)
+      max_losing_years: 1                  # (g) positive in at least 4 of 5 years: at most one included year <= 0
+      min_profit_factor: 1.25              # (h) profit factor after base costs >= 1.25
+  # Secondary: k = 1.0, round 2's declared hypothesis. Picked AFTER seeing the
+  # 2020-2025 fixed-point results, validation included: weaker evidence than k = 0.5.
+  mnq_noise_area_r3_2013_2017_k10:
+    strategy: mnq_noise_area_r2_m5
+    params: {stop_k: 1.0}
+    period: ["2013-01-01", "2018-01-01"]
+    coverage: {reference_m1_bars_per_year: 342192, min_frac: 0.70, min_rth_frac: 0.95}
+    price_checks: *r3_prices
+    pass_rules: *r3_rules
+  # Information only, declared with the two checks above: the same frozen runs
+  # judged on the regular-session rule alone (no one-minute bar-count rule).
+  # Run only if the declared rule excludes a year that this one keeps. They
+  # cannot change any verdict.
+  mnq_noise_area_r3_2013_2017_k05_rth_only_info:
+    strategy: mnq_noise_area_r2_m5
+    params: {stop_k: 0.5}
+    period: ["2013-01-01", "2018-01-01"]
+    coverage: {reference_m1_bars_per_year: 342192, min_frac: 0.0, min_rth_frac: 0.95}
+    price_checks: *r3_prices
+    pass_rules: *r3_rules
+  mnq_noise_area_r3_2013_2017_k10_rth_only_info:
+    strategy: mnq_noise_area_r2_m5
+    params: {stop_k: 1.0}
+    period: ["2013-01-01", "2018-01-01"]
+    coverage: {reference_m1_bars_per_year: 342192, min_frac: 0.0, min_rth_frac: 0.95}
+    price_checks: *r3_prices
+    pass_rules: *r3_rules

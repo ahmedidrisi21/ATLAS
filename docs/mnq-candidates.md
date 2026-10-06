@@ -747,3 +747,123 @@ atlas-research --config atlas_research/configs/mnq.yaml t0 run mnq_noise_area_r2
 atlas-research --config atlas_research/configs/mnq.yaml t0 check mnq_noise_area_r2_2018
 atlas-research --config atlas_research/configs/mnq.yaml t0 check mnq_noise_area_r1_2018_info
 ```
+
+# MNQ round 3: an independent check on 2013-2017 (2026-10-06)
+
+## Round 3 declaration (written and committed before any 2013-2017 backtest)
+
+**Why this round.** The noise area (`noise_area`, round 2's volatility stop) is
+ATLAS's best candidate so far, and the owner asked to keep testing it. A third
+look at 2019-2025 would be a third look at the same data, which round 2's
+write-up ruled out. So this round tests it on Nasdaq-100 data it has never
+seen: **2013-01-01 to 2017-12-31**. No ATLAS run has loaded Nasdaq-100 data
+before 2018 (round 1's download started 2018-01-01). This declaration was
+written while the 2013-2017 download was still running, before its coverage
+report was looked at, and is committed before any 2013-2017 backtest.
+
+**What a pass would mean, and what it wouldn't.** A pass here does **not**
+make the noise area a passed T0 strategy. Round 2's validation (Jan 2024 to
+Jun 2025) still fails: +0.009 R, PF 1.02, 2024 negative, 5 of 17 gates failed.
+This round only says whether the edge exists outside 2018-2025, in five
+earlier years with different regimes (the 2013 and 2017 rallies, the 2015-16
+correction, the August 2015 flash crash, the 2016 Brexit and election gaps).
+A fail is just as informative: it would say the edge is specific to the
+2018-2025 market.
+
+### What runs: two frozen versions, unchanged, each run once
+
+The strategy is `mnq_noise_area_r2_m5` exactly as in round 2: round 1's
+entries (bands from the 14-session average move, gap-adjusted, half-hour
+checkpoints 10:00 … 15:30), the band-only trail, flat at 16:00, and the
+volatility stop at k × the band's half-width, live every minute. Nothing is
+retuned, nothing is selected, and no new deflated-Sharpe trial is added. Both
+go through `atlas-research t0 check` (`atlas_research/check.py`), as the 2018
+check did.
+
+| Check | Version | Status | Why this version |
+| --- | --- | --- | --- |
+| `mnq_noise_area_r3_2013_2017_k05` | stop_k = 0.5 | **primary: the verdict** | Round 2's verdict point: the whole-dev pick, chosen by the declared method without seeing validation. It is the point the 2018 check froze. |
+| `mnq_noise_area_r3_2013_2017_k10` | stop_k = 1.0 | **secondary** | Round 2's declared hypothesis. **It was picked after seeing the 2020-2025 results held fixed, validation included** (positive every year, +0.106 R and PF 1.27 on validation). That is selection on validation, so a pass here is weaker evidence than a k = 0.5 pass, and it can't stand in for one. |
+
+Neither version has ever traded 2013-2017. Both are on round 2's declared
+grid (`check.py` refuses an off-grid frozen value).
+
+### Data and the coverage rule (declared before the coverage report)
+
+- **Data:** `USATECHIDXUSD` one-minute bid/ask bars, 2013-01-01 to 2017-12-31,
+  downloaded and built with the existing `atlas-research data download/build`
+  path, the same proxy as rounds 1-2 (mid re-quoted at one MNQ tick, price
+  scale 1,000). Data begins 2013-01-02, so the 14-session σ first exists in
+  late January 2013 and no trade comes earlier (as in the 2018 check).
+- **Coverage rule (reused from MES round 3 and the 2018 check, unchanged): a
+  year is excluded** if it has fewer than 70% of the median full year's
+  one-minute bars (342,192, round 1's report for 2019-2024) **or** fewer than
+  95% of its regular-session minutes (09:30-16:00 New York, exchange trading
+  days) quoted. An excluded year's trades are dropped and it is left out of
+  the benchmark windows. Every year's coverage is reported, with the
+  `atlas-research data coverage` report, before any backtest.
+- **Information only, declared now:** MES round 3 found that Dukascopy's
+  pre-2019 index CFDs are often quoted only 07:00-20:00 New York. That cuts
+  the one-minute bar count without touching the regular session, which is
+  the only part this strategy trades. If the declared rule excludes a year
+  that the regular-session rule alone would keep, both versions are also run
+  once with the regular-session rule only
+  (`mnq_noise_area_r3_2013_2017_k05_rth_only_info`, `..._k10_rth_only_info`).
+  Those runs are information and cannot change either verdict. If no year
+  is excluded that way, they are not run.
+- **Price scale:** the CFD mid at the last quote before 16:00 New York against
+  the published Nasdaq-100 closes on 2013-12-31 (3,592.00), 2014-12-31
+  (4,236.28), 2015-12-31 (4,593.27), 2016-12-30 (4,863.62) and 2017-12-29
+  (6,396.42). More than 1% off stops the run as a scale error, which would be
+  fixed in the loader and reported. If a date has no quote at all because of a
+  data gap, it is replaced by the nearest earlier trading day with one, and
+  this is reported. That is a data fact, not tuning.
+
+### Costs (unchanged)
+
+Base costs, 1.625 points a market-in, market-out round trip (0.75 pt
+commission, the 1-tick spread charged ×1.5, 1 tick of slippage on every
+market fill), and the review's Stress tier: fills at the mid and a flat
+2.0 points a round trip, all in. 2× spread is reported as information.
+
+### Pass rules: all eight must hold, for each version
+
+As the 2018 check, plus (g) and (h):
+
+| Rule | Threshold |
+| --- | --- |
+| (a) average R after base costs | > 0 |
+| (b) average R minus exposure-matched buy-and-hold R | > 0 |
+| (c) average R minus the random-entry p95 (50 runs) | > 0 |
+| (d) trades | ≥ 150 |
+| (e) average R at the 2.0 pt all-in Stress tier | > 0 |
+| (f) average R minus the random-direction p95 (50 runs) | > 0 |
+| **(g) positive years** | average R after base costs > 0 in at least 4 of the 5 years; if a year is excluded, at most one included year may be ≤ 0 (a year with no trades counts as ≤ 0) |
+| **(h) profit factor after base costs** | ≥ 1.25 |
+
+The rules ask mostly for the sign. Profit factor ≥ 1.25 is the T0 gate's
+threshold, so (h) also asks for some size. The T0 gate table is reported as
+information.
+
+**Also reported for each version**: trades, average R at base and at 2.0 pt,
+net points per trade and the median 1R in points, profit factor, every year
+(at base and at 2.0 pt), and the share of the total R made by the 10 best
+trades. The 2018 check's R was 91% from its top 10 trades, so this is
+reported up front.
+
+### Run discipline
+
+Each declared check is run once. No rerun after seeing a result, no change
+to the code paths the checks use, and every run, pass or fail, goes into
+`research/experiments.jsonl` (`kind: frozen_check`). The holdout (July 2025
+on) stays locked; the check period ends 2017-12-31.
+
+### New code for this round (committed with this declaration, tested on synthetic data)
+
+- `atlas_research/check.py`: two new pass rules, `max_losing_years` (g) and
+  `min_profit_factor` (h); every check result now also has the share of R from
+  the top 10 trades (`top10_share_of_r`) and a by-year table at the Stress tier.
+  Earlier checks evaluate exactly as before, because a rule is applied only if
+  declared.
+- `atlas_research/configs/mnq.yaml`: the four checks above under `checks:`.
+- `tests/research/test_mnq_round3.py`.

@@ -220,7 +220,7 @@ information:
 checks:
   mnq_noise_area_r2_2018:
     strategy: mnq_noise_area_r2_m5
-    params: {stop_k: CHOSEN}          # filled in with round 2's final_params (whole-dev pick) before the 2018 run
+    params: {stop_k: 0.5}             # round 2's final_params, whole-dev pick (run mnq_noise_area_r2_m5-20261006-113937-69c5b8), set before the 2018 run
     period: ["2018-01-01", "2019-01-01"]   # end exclusive; data begins 2018-01-02, so the 14-session sigma
                                            # first exists in late January and no trade comes earlier
     coverage:

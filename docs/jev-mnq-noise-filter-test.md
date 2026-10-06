@@ -100,3 +100,67 @@ compared with plain and random skips there.
   filtered strategy worth a forward test, not one worth trading.
 - Every arm's result is reported in R after costs, including a loss or no
   difference.
+
+# Results (run 2026-10-06, `mnq_noise_area_r2_m5+jev-filter-20261006-160302`)
+
+Run exactly as declared above; nothing was changed after the first answer.
+Jev answered all 4,253 requests (1,164 traded candidates plus the other stop
+settings' candidates used for the cut-offs, and the 2018 check), with no
+timeouts or errors. Model `jev-1.13.0`, questions `atlas-jev-noise-q1`.
+TypeSafe usage: 8.0 M input and 0.39 M output tokens.
+
+**Verdict: FAIL, 3 of 9 marks passed.** Skipping the trades Jev rated lowest
+did no better than taking every trade, and worse than skipping the same
+number of trades at random.
+
+| After MNQ costs | Trades | Avg R | Profit factor | Win rate | Avg R at 2.0 pt Stress |
+|---|---|---|---|---|---|
+| Plain (every trade, = T0's 1,164) | 1,164 | +0.150 | 1.30 | 36.7% | +0.140 |
+| Jev skips lowest third | 809 | +0.153 | 1.30 | 36.0% | +0.143 |
+| Random skips, same count (200 runs) | 809 | mean +0.163, p95 +0.213 | | | |
+
+| Pass mark | Jev arm | Result |
+|---|---|---|
+| 1. At least 300 trades | 809 | pass |
+| 2. Beats plain, bootstrap ≥ 0.95 | 0.51 | **fail** |
+| 3. Beats random-skip p95 (+0.213) | +0.153 | **fail** |
+| 4a. Dev avg R ≥ +0.10 | +0.192 (plain +0.198) | pass |
+| 4b. Validation avg R ≥ +0.10 | +0.034 (plain +0.009) | **fail** |
+| 4c. Dev profit factor ≥ 1.25 | 1.40 (plain 1.43) | pass |
+| 4d. Validation profit factor ≥ 1.25 | 1.06 (plain 1.02) | **fail** |
+| 5. Every year above zero | 2025 H1 −0.064 | **fail** |
+| 6. Stress tier above zero | +0.143 | pass |
+
+By year, avg R (trades): plain 2020 +0.089 (204), 2021 +0.146 (211), 2022
++0.266 (248), 2023 +0.276 (206), 2024 −0.073 (198), 2025 H1 +0.176 (97).
+Jev 2020 +0.035 (130), 2021 +0.207 (154), 2022 +0.156 (176), 2023 +0.357
+(150), 2024 +0.085 (131), 2025 H1 −0.064 (68). Jev helped in 2024 and hurt
+in 2025; over the whole span the two cancel.
+
+**Does Jev's number track results at all?** No, if anything slightly
+backwards. Rank correlation between Jev's probability and the trade's R is
+−0.10 over the 1,164 trades. By Jev-score third, lowest first: +0.170,
++0.068, +0.211 R. Kept trades averaged +0.153 R, skipped ones +0.142 R.
+Jev's average probability was 0.46 against a real profit rate of 0.37.
+
+**2018 check (information only).** 200 trades, Jev kept 145. Plain +0.533 R
+(PF 1.88), Jev +0.493 R (PF 1.80), random skips mean +0.533, p95 +0.725.
+At the Stress tier plain +0.510, Jev +0.469. Rank correlation −0.05; the
+trades Jev skipped averaged +0.637 R, better than the ones it kept.
+
+## What this says
+
+- Jev, asked this way, can't tell the better noise-band trades from the
+  worse ones. On both the 2020-2025 trades and 2018, its skips land no better
+  than a coin flip, and a little worse than random thinning.
+- The validation lift (+0.009 to +0.034 R) is within what random skips give
+  and far short of +0.10.
+- The possible memory caveat cuts the other way here: if Jev had seen this
+  history, that did not help it.
+- The noise-band strategy itself still hasn't passed T0, with or without Jev.
+- This is one question wording and one state. Another wording would be a new,
+  separately declared test; nothing here suggests which one would work.
+
+Files: the run's `result.json` and every Jev answer (`jev_answers.jsonl`, for
+replay with `--replay`) are under `research/runs/` (not committed) and copied
+to the project folder `jev-mnq-noise/`.

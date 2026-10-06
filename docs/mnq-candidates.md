@@ -886,8 +886,8 @@ data coverage` (its `data_checks:` now span 2013-2025):
 | 2017 | 211,146 | 61.7% | 249 | 249 | 99.7% | 02:00-16:00 | **excluded** (M1 count) | included |
 
 **The declared rule keeps one year, 2014.** 2013 fails both parts: 68 trading
-days have no regular-session quote at all (February to May is mostly
-missing). 2015, 2016 and 2017 fail only the bar count. From 2015 the CFD was
+days have no regular-session quote at all (March and April are
+missing, February and May are partial). 2015, 2016 and 2017 fail only the bar count. From 2015 the CFD was
 quoted only from 02:00 to 16:00 New York, so the overnight bars are missing,
 but the regular session (the only part this strategy trades or reads, up to
 the 16:00 close it uses as the next day's prior close) is 99.7-99.98% quoted.
@@ -935,3 +935,185 @@ Published closes are from Nasdaq's index history, as listed by digrin.com.
 
 The CFD's own median spread was 2.2 points in 2013-2014 and 1.0-1.1 points in
 2015-2017. It isn't charged, because the mid is re-quoted at one MNQ tick.
+
+## Round 3 results
+
+**Bottom line: both frozen versions fail the declared 2013-2017 check.** The
+primary, k = 0.5, made +0.045 R a trade on its one included year (2014), but
+it was negative at the 2.0 pt Stress tier (−0.034 R) and its profit factor
+was 1.06: it fails (e) and (h). The secondary, k = 1.0, lost money in 2014
+(−0.035 R) and fails five rules. The information runs on the four years with
+a full regular session (2014-2017) say the same thing more strongly: in
+points, the strategy made about nothing in 2014-2017 (k = 0.5: −0.2 points a
+trade; k = 1.0: +0.1). **So the edge seen in 2018-2023 did not exist in
+2014-2017.** Each check ran once. All four runs are in
+`research/experiments.jsonl`:
+
+- `mnq_noise_area_r3_2013_2017_k05-20261006-182003-061f7b`, the primary check (the verdict)
+- `mnq_noise_area_r3_2013_2017_k10-20261006-182044-56551e`, the secondary check
+- `mnq_noise_area_r3_2013_2017_k05_rth_only_info-20261006-182130-0edbb3`, information
+- `mnq_noise_area_r3_2013_2017_k10_rth_only_info-20261006-182225-bcd691`, information
+
+(The registry lines of the information runs carry `passed: false` against the
+same eight rules; they can't change either verdict.)
+
+### The declared checks (2014 only; 2013, 2015, 2016 and 2017 excluded for coverage)
+
+| | **k = 0.5 (primary)** | k = 1.0 (secondary) |
+| --- | --- | --- |
+| Trades | 199 | 199 |
+| Avg R gross (before commission) | +0.172 | +0.032 |
+| **Avg R after base costs** | **+0.045** | −0.035 |
+| Avg R at 2.0 pt Stress | −0.034 | −0.080 |
+| Avg R at 2× spread | +0.030 | −0.043 |
+| Profit factor | 1.06 | 0.92 |
+| Win rate | 30.2% | 33.7% |
+| Median 1R | 6.5 pt | 12.4 pt |
+| Net points per trade | +0.57 | +0.16 |
+| Total points | +114 | +32 |
+| Exits | 102 stops (4 gaps), 93 trail/close | 47 stops (1 gap), 151 trail/close |
+| Long / short avg R | +0.034 (103) / +0.057 (96) | +0.006 / −0.078 |
+| Exposure-matched buy-and-hold R | +0.003 | +0.001 |
+| Random entry p95 (mean) | −0.436 (−0.623) | −0.236 (−0.352) |
+| Random direction p95 (mean) | −0.058 (−0.207) | −0.020 (−0.125) |
+| Top 10 trades | +80.5 R of a +8.9 R total (905%); the other 189 lost −71.6 R | +42.1 R; total −6.9 R (the other 189 lost −49.0 R) |
+| Max drawdown in trade order | 29.2 R | 24.8 R |
+
+| Rule | k = 0.5 (primary) | k = 1.0 (secondary) |
+| --- | --- | --- |
+| (a) Avg R after base costs (> 0) | +0.045, pass | −0.035, **fail** |
+| (b) minus exposure-matched B&H (> 0) | +0.041, pass | −0.036, **fail** |
+| (c) minus random-entry p95 (> 0) | +0.480, pass | +0.201, pass |
+| (d) Trades (≥ 150) | 199, pass | 199, pass |
+| (e) Avg R at 2.0 pt Stress (> 0) | −0.034, **fail** | −0.080, **fail** |
+| (f) minus random-direction p95 (> 0) | +0.103, pass | −0.014, **fail** |
+| (g) Included years ≤ 0 (≤ 1 of 1) | 0, pass | 1, pass |
+| (h) Profit factor (≥ 1.25) | 1.06, **fail** | 0.92, **fail** |
+| **Verdict** | **FAIL (6 of 8)** | **FAIL (3 of 8)** |
+
+By year: only 2014 is included, so the year is the whole table above. 2014
+at 2.0 pt: k = 0.5 −0.034 R, k = 1.0 −0.080 R.
+
+The T0 gate table, as information: k = 0.5 fails 8 of the 12 gates a frozen run can be judged on
+(300 trades, +0.10 R, PF, Monte Carlo drawdown 18.4%, deflated Sharpe 0.49,
+year share, skip-10% p05, one ±20% neighbour at −0.030 R). k = 1.0 fails
+10 of 12.
+
+The random-entry benchmark is very negative here (p95 −0.44 R for k = 0.5)
+because a random entry with a 6.5 point stop pays 1.625 points of cost, a
+quarter of its risk, on every trade. So (c) is easy to pass this round and
+says little.
+
+### Information: the four years with a full regular session (2014-2017)
+
+| | k = 0.5 | k = 1.0 |
+| --- | --- | --- |
+| Trades | 808 | 808 |
+| Avg R gross | +0.104 | +0.069 |
+| Avg R after base costs | −0.009 | +0.010 |
+| Avg R at 2.0 pt Stress | −0.074 | −0.025 |
+| Profit factor | 0.99 | 1.02 |
+| Median 1R | 7.0 pt | 13.5 pt |
+| Net points per trade | −0.18 | +0.10 |
+| Random direction p95 | −0.079 | −0.016 |
+| Top 10 trades | +156.9 R; total −7.6 R | +83.3 R of +7.8 R (1,069%) |
+| Rules failed | (a), (b), (e), (g), (h) | (e), (h) |
+
+| Year | Trades | k = 0.5 R (2.0 pt) | k = 0.5 pt/trade | k = 1.0 R (2.0 pt) | k = 1.0 pt/trade |
+| --- | --- | --- | --- | --- | --- |
+| 2014 | 199 | +0.045 (−0.034) | +0.57 | −0.035 (−0.080) | +0.16 |
+| 2015 | 203 | −0.080 (−0.155) | −1.16 | +0.021 (−0.009) | −0.40 |
+| 2016 | 208 | −0.013 (−0.039) | −0.31 | +0.022 (−0.010) | +0.11 |
+| 2017 | 198 | +0.012 (−0.066) | +0.21 | +0.029 (−0.002) | +0.55 |
+
+Not one year of either version is positive at the 2.0 pt Stress tier.
+
+### Against the earlier periods (k = 0.5, gross before commission)
+
+The points per trade are what compare across periods. Because the index
+level moved from about 4,000 to about 20,000, they are also given as a share
+of the entry price:
+
+| Period | Trades | Mean entry | Median 1R | Gross pt / trade | Gross, basis points of price | Net pt / trade |
+| --- | --- | --- | --- | --- | --- | --- |
+| 2014 (declared check) | 199 | 3,849 | 6.5 | +1.3 | +3.7 bp | +0.6 |
+| 2014-2017 (information) | 808 | 4,638 | 7.0 | +0.6 | +1.2 bp | −0.2 |
+| 2018 (round 2 check) | 200 | 6,969 | 15.6 | +10.4 | +15.1 bp | +9.6 |
+| 2020-Jun 2025 (round 2 verdict run) | 1,164 | 14,576 | 44 | +8.0 | +5.7 bp | +7.3 |
+
+## What this says (round 3)
+
+- **The edge didn't show up before 2018.** On the declared check, k = 0.5
+  kept a positive sign in 2014 after base costs, but it lost at the 2.0 pt
+  Stress tier and its profit factor was 1.06. Its +8.9 R total is less than
+  its 10 best trades (+80.5 R); the other 189 lost. Over the four clean years
+  2014-2017 (information), it made −0.2 points a trade, and two of four years
+  lost. This is not a small edge that costs ate. Before commission it made
+  about 1 basis point of price a trade, against 15 in 2018 and 6 in
+  2020-2025.
+- **k = 1.0, the hypothesis from round 2, didn't hold up either.** It lost in
+  2014 (the declared check) and made +0.1 points a trade over 2014-2017,
+  negative every year at 2.0 pt. Its round-2 stability (positive every year
+  2020-2025) was a property of that period, not of the rule. It was picked
+  after seeing validation, and this is what such a pick is worth.
+- **What the evidence now looks like.** The strategy works in 2018-2023,
+  turbulent years with large intraday moves, and is about flat in 2014-2017
+  and 2024-mid 2025, calmer years. It has passed one independent year (2018)
+  and failed the next independent test (2014-2017). The likeliest reading is
+  that the noise-area breakout pays when the index has big trending days, and
+  not otherwise. That reading is a description of this result, not a tested
+  rule: a volatility filter chosen now would be fitted to these numbers, and
+  it would need a declared round on fresh data of its own.
+- **The tight stop makes this a cost problem in quiet years.** In 2014-2017
+  the k = 0.5 stop was a median 6.5-7 points. MNQ's 1.625 point round trip
+  is then a quarter of 1R, so even a real but small edge can't clear it. The
+  2.0 pt Stress tier, which the review requires, is negative in every
+  2014-2017 year for both versions.
+- **What it means for ATLAS.** A pass here could not have made the noise area
+  a passed T0 strategy, because 2024-25 validation still fails. The fail
+  removes the main argument for keeping it: that the effect is real outside
+  the period it was built on. Nothing is proposed for the demo account, and
+  no strategy file was written. ATLAS should not spend more rounds tuning
+  this strategy on Dukascopy history. If it is revisited, it should be as a
+  declared regime-dependent hypothesis tested on data not yet used (the
+  holdout, once the operator decides to spend it, or real NQ prints).
+
+## Round 3 caveats
+
+- **One year decides the declared verdict.** The reused coverage rule
+  excluded 2015-2017 for missing overnight bars, which this strategy doesn't
+  use. The declaration foresaw this and made the regular-session-only runs
+  information. They agree with the verdict, so the exclusion didn't change
+  the conclusion. 2013 has no usable regular session for March and April and
+  is out under both rules.
+- Same proxy caveats as rounds 1-2: CFD mid re-quoted at one MNQ tick, not
+  futures prints. MNQ didn't trade until May 2019; the costs are MNQ's in
+  points, which NQ's (per point of index) are close to. A 6.5 point stop is
+  2-3 of the CFD's own 2014 spreads wide, so fill modelling matters more here
+  than in later years.
+- Dukascopy's Dec 31 quotes stop at 13:00-14:00 New York in 2014 and 2015;
+  a trade open on those two afternoons is priced on the last midday quote.
+  That affects at most two trades.
+- The holdout (July 2025 on) stayed locked and was never loaded.
+
+## Round 3 files
+
+- `atlas_research/check.py`: pass rules `max_losing_years` (g) and
+  `min_profit_factor` (h); every check reports the top-10 share of R and a
+  by-year table at the Stress tier.
+- `atlas_research/configs/mnq.yaml`: the two declared checks and the two
+  regular-session-only information checks under `checks:`; `data_checks:`
+  now reports 2013-2025 with the extra price dates.
+- `tests/research/test_mnq_round3.py`.
+
+Reproduce:
+
+```bash
+atlas-research --config atlas_research/configs/mnq.yaml data download --symbols USATECHIDXUSD --start 2013-01-01 --end 2017-12-31 --workers 3   # rerun to resume
+atlas-research --config atlas_research/configs/mnq.yaml data build    --symbols USATECHIDXUSD --start 2013-01-01 --end 2017-12-31
+atlas-research --config atlas_research/configs/mnq.yaml data coverage
+atlas-research --config atlas_research/configs/mnq.yaml t0 check mnq_noise_area_r3_2013_2017_k05
+atlas-research --config atlas_research/configs/mnq.yaml t0 check mnq_noise_area_r3_2013_2017_k10
+atlas-research --config atlas_research/configs/mnq.yaml t0 check mnq_noise_area_r3_2013_2017_k05_rth_only_info
+atlas-research --config atlas_research/configs/mnq.yaml t0 check mnq_noise_area_r3_2013_2017_k10_rth_only_info
+```

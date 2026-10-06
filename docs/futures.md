@@ -342,14 +342,56 @@ How ATLAS could use them, within AGENTS.md:
   was waiting for. NOT IMPLEMENTED. Its write tools must never be given to a
   Hermes profile: that would be an order path around the engine.
 - **NinjaTrader MCP as the engine's transport** (a second `FuturesVenue` that
-  calls the MCP tools instead of REST): possible, and it may avoid the API
-  subscription. Against it: beta, no client order ID on `place_order` (a
-  `TrackingTimeout` leaves the outcome unknown), bracket legs as offsets,
-  hourly idle sessions. NOT IMPLEMENTED; worth it only if the REST API is
-  closed to FundedNext accounts and the MCP route is open.
+  calls the MCP tools instead of REST): chosen 2026-10-06 as the route to a
+  **free NinjaTrader demo account**, because the REST API needs a funded live
+  account and the paid API Access add-on and the owner has bought nothing yet.
+  The connection is built (below); the venue is built once the server's real
+  answers are recorded. Against it, still: beta, no client order ID on
+  `place_order` (a `TrackingTimeout` leaves the outcome unknown), bracket legs
+  as offsets, hourly idle sessions.
 - **Its connection risk limits** (exposure cap, MES-only allowlist) are a
   broker-side backstop independent of ATLAS, whichever route places orders,
   if the engine's connection is authorized through the same OAuth.
+
+### The MCP route to a free demo account (connection BUILT 2026-10-06; venue NOT IMPLEMENTED)
+
+`atlas_engine/adapters/ninjatrader/mcp.py`, used only by the engine host.
+
+| Part | State |
+| --- | --- |
+| Discovery: protected-resource metadata names `https://demo.tradovateapi.com`; its metadata gives `web.ninjatrader.com/oauth?env=demo`, `/auth/oauthtoken`, `/auth/register`, PKCE S256, public clients | VERIFIED (live probe 2026-10-06) |
+| Registration of ATLAS as a public client with a `http://127.0.0.1:<port>/callback` return address | VERIFIED (accepted, and the sign-in page loads) |
+| Code exchange (form body, PKCE verifier, `resource`) | VERIFIED in docs; not yet run against the server |
+| Refresh (JSON body with `resource`, rotating refresh token, keep the saved token on failure) | VERIFIED in docs (mcp/authentication); not yet run |
+| Streamable HTTP JSON-RPC, session id, re-initialize after an idle session ends, one retry after a 401 | Per the MCP specification; not yet run |
+| A free simulation login is accepted | UNVERIFIED until the first sign-in |
+| The shape of every tool's answer | UNVERIFIED: `atlas-engine ninjatrader-mcp capture` records them (read tools only) before the venue is written |
+
+What ATLAS lets the connection do, enforced in the client, whatever the
+consent screen grants:
+
+- Demo only: there is no live server in `SERVERS`.
+- Read tools for anyone holding a client; `place_order`, `modify_order`,
+  `cancel_order`, `close_position` only for a client built with `orders=True`,
+  which only the futures venue will build, behind the decision pipeline.
+- Never `update_risk_settings` or the alert tools.
+- Tokens in `<state>/ninjatrader-mcp-token.json`, mode 600; never logged or
+  shown to Hermes. The browser's return address carries a one-time code that
+  is useless without the verifier ATLAS kept.
+
+Operator steps: `atlas-engine ninjatrader-mcp login --state <dir>` (add
+`--paste` when the browser is on another computer), then `check`, then
+`capture`. On the consent screen grant Trade only when the engine is going to
+trade, never Manage Risk Settings or Alerts, and set the connection's risk
+limits: MES only, max total exposure 2.
+
+How the venue will map onto the tools (to confirm against the capture):
+quotes and bars from `market_snapshot` / `market_history`; the entry bracket
+as `place_order` with signed offsets computed from the engine's absolute stop
+and target; protection repair with `modify_order` (absolute prices); exits
+with `close_position` only for ATLAS's own contract; reconciliation from
+`my_portfolio` and `order_history`; after a `TrackingTimeout`, look the order
+up in `order_history` before ever sending again (there is no client order ID).
 
 ## Order lifecycle and brackets
 

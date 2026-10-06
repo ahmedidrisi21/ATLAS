@@ -161,6 +161,40 @@ def ninjatrader_venue(broker: str, cfg, settings, state: Path, env: dict | None 
     return venue, "fake-ninjatrader"
 
 
+def ninjatrader_mcp(args, stdin=None, out=print) -> None:
+    """``atlas-engine ninjatrader-mcp login|check|capture``: the demo account through NinjaTrader's MCP server."""
+    from atlas_engine.adapters.ninjatrader import mcp
+
+    state = Path(args.state)
+    oauth = mcp.OAuth(mcp.TokenStore(state / "ninjatrader-mcp-token.json"))
+    try:
+        if args.action == "login":
+            port = args.port or mcp.free_port()
+            req = oauth.begin(f"http://127.0.0.1:{port}/callback")
+            out("Open this link in a desktop browser, sign in to NinjaTrader and allow ATLAS:\n\n" + req.url + "\n")
+            out("On the consent screen allow Trade, Market Data and the View permissions only, not Manage Risk "
+                "Settings or Alerts. Under Risk limits list MES only, with a max total exposure of 2.")
+            if args.paste:
+                out("\nWhen the browser lands on a page that will not load, copy its full address and paste it here:")
+                url = (stdin or sys.stdin).readline()
+            else:
+                out(f"\nWaiting for the browser to come back to 127.0.0.1:{port} ...")
+                url = mcp.wait_for_callback(port)
+            oauth.finish(req, url)
+            out("Signed in. Run `atlas-engine ninjatrader-mcp check` next.")
+        elif args.action == "check":
+            client = mcp.McpClient(oauth)
+            info = client.initialize()
+            portfolio = client.call("my_portfolio")
+            out(json.dumps({"server": info.get("serverInfo", {}), "portfolio": portfolio}, indent=2, default=str))
+        else:
+            summary = mcp.capture(mcp.McpClient(oauth), state / "ninjatrader-mcp-capture")
+            out(json.dumps(summary, indent=2))
+            out(f"answers saved under {state / 'ninjatrader-mcp-capture'} (no tokens in them)")
+    except mcp.McpError as e:
+        raise SystemExit(str(e)) from None
+
+
 def load_jev(assignment: dict, decision, state: Path, env: dict | None = None) -> list:
     """Jev on TypeSafe's API, when a strategy is assigned to it and the host has ``TYPESAFE_API_KEY``.
 
@@ -227,6 +261,14 @@ def main(argv: list[str] | None = None) -> None:
     c = sub.add_parser("scorecard", help="closed trades in R after costs by setup, and Hermes's verdict")
     c.add_argument("--state", required=True)
 
+    n = sub.add_parser("ninjatrader-mcp", help="sign in to the NinjaTrader demo through its MCP server, check it, "
+                                               "or record its answers (read-only)")
+    n.add_argument("action", choices=["login", "check", "capture"])
+    n.add_argument("--state", required=True, help="engine state directory; the sign-in is saved there (mode 600)")
+    n.add_argument("--port", type=int, default=0, help="login: local port the browser returns to (default: any free)")
+    n.add_argument("--paste", action="store_true",
+                   help="login: the browser is on another computer; paste the address it ends on instead")
+
     args = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
@@ -268,6 +310,8 @@ def main(argv: list[str] | None = None) -> None:
         intents = {r["intent_id"]: r for r in j.rows("agent_actions", 100_000)
                    if r.get("action") == "submit_trade_intent" and r.get("intent_id")}
         print(json.dumps(scorecard(j.rows("trades", 100_000), intents), indent=2))
+    elif args.cmd == "ninjatrader-mcp":
+        ninjatrader_mcp(args)
     elif args.cmd == "run":
         from .http import make_server
         engine = build_engine(args)

@@ -37,7 +37,7 @@ atlas-engine-sim = "atlas_api.ops:main"
 atlas-engine = "atlas_api.engine_cli:main"
 
 [tool.setuptools.packages.find]
-include = ["atlas_engine*", "atlas_research*", "atlas_api*", "atlas_mcp*", "atlas_plugins*"]
+include = ["atlas_engine*", "atlas_research*", "atlas_api*", "atlas_mcp*", "atlas_plugins*", "atlas_holdout*"]
 
 [tool.setuptools.package-data]
 atlas_research = ["configs/*.yaml"]

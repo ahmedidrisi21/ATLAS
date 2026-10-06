@@ -414,3 +414,109 @@ atlas-research --config atlas_research/configs/mnq.yaml data coverage
 atlas-research --config atlas_research/configs/mnq.yaml t0 run --all
 atlas-research --config atlas_research/configs/mnq.yaml t0 info mnq_trend_filter_d1
 ```
+
+# MNQ round 2: the noise area with a closer stop (2026-10-06)
+
+## Round 2 declaration (written and committed before any round-2 or 2018 run)
+
+**This is a second look, not a fresh test.** Round 1's results above were seen
+before this was written: the noise-area strategy made +0.023 R a trade (+7.7
+points) over 1,171 out-of-sample trades and failed only the size gates, with a
+1R (the opposite band, a median 241 points away) that was hit on 4 trades.
+Round 1's own write-up said a tighter risk unit could only be tested as a new,
+declared round. This is that round. Anything it finds is weaker evidence than
+a first test would be, which is why it also has an independent 2018 check,
+declared here.
+
+### What changes: one rule
+
+A fixed protective stop that also defines 1R. It is live every minute, from
+entry to exit:
+
+> stop distance = k × the band's half-width at the entry checkpoint =
+> k × σ(t) × the band's base price, measured from the checkpoint close.
+
+σ(t) is the strategy's own noise measure: the average absolute move from the
+09:30 open to that checkpoint over the previous 14 sessions. The base price is
+the one the band is built on: max(open, prior close) for a long, min(open,
+prior close) for a short. So k counts "noise units" against the trade.
+
+**Grid: k = 0.5, 1.0, 1.5, 2.0** (4 points).
+
+**Why this stop, on principle:**
+
+- It uses the strategy's own unit of volatility, so it scales with the market
+  and with the time of day exactly as the entry bands do. Nothing new is
+  estimated.
+- The points have a plain meaning. A long enters on a close above the upper
+  band, one noise unit above the base. k = 1 puts the stop about back at the
+  base (the open or prior close): the breakout has fully failed. k = 0.5 is
+  halfway back into the noise area. k = 2 is near the opposite band. It is
+  never wider than round 1's stop, because the opposite band is at least two
+  half-widths from the entry close.
+- It was not chosen from round-1 trades. No round-1 excursion (MAE/MFE),
+  stop-distance or per-k analysis was run or looked at. Only round 1's
+  published summary numbers were seen, and they are quoted above. The grid is
+  a simple ladder from half to double the natural unit.
+
+### What stays exactly as in round 1
+
+- **Entries:** round 1's signals, unchanged. The setup's checkpoint state
+  machine is not told about the stop. A trade stopped out is not re-entered
+  until the setup would have gone flat and a new breakout fires, so the
+  entry list is round 1's.
+- **Exits:** the band-only trail at the half-hour checkpoints (10:00 … 15:30),
+  flat at 16:00, an exit and an opposite entry at the same checkpoint both
+  fill. The band + TWAP trail is not retested.
+- **Data, costs, segments, gates:** the same proxy, base costs (1.625 pt all
+  in), the 2.0 pt all-in Stress tier, 2× spread, the walk-forward on 2019-2023
+  (OOS from 2020), validation Jan 2024 to Jun 2025, the holdout locked. Every
+  T0 gate, plus the review's three checks (Stress > 0, every OOS year > 0,
+  beats random direction's p95).
+- **Deflated Sharpe:** these 4 trials pool with round 1's 2 noise-area trials
+  (same setup, `noise_area`), 6 in all.
+- The run is made once. The verdict is the standard T0 run (walk-forward
+  picks; the final point is picked on the whole dev period and trades
+  validation once).
+
+R is not comparable across rounds: 1R is a different distance. **Every
+result is also given in points per trade**, which are comparable.
+
+**Information only, also declared now:** each of the 4 grid points is
+also reported held fixed over the same out-of-sample span (2020-01 to
+2025-06). That covers trades, average R at base and Stress costs, points per
+trade, profit factor, the gates a fixed point can be judged on, sign by year,
+and the random-entry and random-direction checks. These per-point numbers
+are not the verdict and cannot change it.
+
+### Independent check on 2018, declared before any 2018 run
+
+- **What runs:** the frozen grid point that round 2 picks on the whole dev
+  period (its `final_params`), over 2018-01-01 to 2018-12-31. It goes through
+  `atlas-research t0 check` (`atlas_research/check.py`): nothing is selected,
+  no new deflated-Sharpe trial is added, and the costs and simulator are the
+  same. The chosen k is written into `checks:` in `mnq.yaml` after the round-2
+  run and before the 2018 run. Nothing else in the check may change then.
+- **Data rule:** 2018 is included only if it has at least 70% of the median
+  full year's one-minute bars (342,192, from round 1's report) and at least
+  95% of regular-session minutes quoted. Round 1's report already showed
+  99.3%. The price is checked against the published Nasdaq-100 close on
+  2018-12-31 (6,329.96); more than 1% off stops the run. Data begins
+  2018-01-02, so the 14-session σ first exists in late January. There are no
+  trades before then.
+- **Pass rules, all of which must hold:** (a) average R after base costs > 0;
+  (b) above exposure-matched buy-and-hold R; (c) above the random-entry p95
+  (50 runs); (d) at least 150 trades; (e) average R at the 2.0 pt Stress tier
+  > 0; (f) above the random-direction p95 (50 runs). These rules ask for the
+  sign, not the +0.10 R size. One year is about 200 trades, too few to measure
+  a size reliably. Beating the random-direction p95 on that sample already
+  needs a real edge. The year-share rule doesn't apply to a single year. The
+  T0 gate table is reported as information.
+- **Also reported, as information only:** round 1's original band-stop version
+  (`mnq_noise_area_m5`, band trail) on the same 2018, under the same rules.
+  It cannot change any verdict.
+- **2018 in round 1:** 2018 was loaded only as indicator warm-up for the
+  RSI(2) run (`warmup_days: 365`) and the trend filter. The noise-area run
+  loaded from 2019-01-01, so it never saw 2018. Every T0 window starts in 2019
+  or later. After this declaration is committed, the round-1 trade files are
+  checked for any 2018 entry, and the result is reported below.

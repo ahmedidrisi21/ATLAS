@@ -171,6 +171,34 @@ strategies:
     # fixed: long only; enter at the 16:00 close; exit at the first 16:00 close above the 5-day SMA or with
     # RSI(2) > 70, else at the 5th close after entry; disaster stop 3 x daily ATR(14) (sets 1R).
 
+  # MNQ round 2 (declared 2026-10-06, after round 1's results were seen and
+  # before any round-2 run): the round-1 noise-area strategy, entries, band
+  # trail, checkpoints, flat-at-16:00, costs, segments and gates all unchanged,
+  # with a closer fixed protective stop that also sets 1R. The stop is k x the
+  # band's own half-width at the entry checkpoint, sigma(t) x the band's base
+  # price (max(open, prior close) for a long, min(...) for a short), measured
+  # from the checkpoint close: k noise units against the trade. k=1 puts the
+  # stop roughly back at the open, the middle of the noise area; k=2 is never
+  # wider than round 1's opposite-band stop. Live every minute. The deflated
+  # Sharpe pools these 4 trials with round 1's 2 (same setup, noise_area).
+  mnq_noise_area_r2_m5:
+    setup: noise_area
+    bar: 5min
+    report_grid_points: true      # information: every grid point also reported held fixed over the OOS span
+    hypothesis: "MNQ round 2, NQ review #3 with a volatility stop: the round-1 noise-area breakout (band-only trail, half-hour checkpoints, flat at 16:00) with a protective stop k x the band half-width (the 14-session average open-to-checkpoint move) from the entry close, which also sets 1R, pays >= +0.10 R and PF >= 1.25 after MNQ costs."
+    symbols: [MNQ]
+    exits:
+      rr: null
+      friday_flatten_utc: null
+      reenter_at_exit_bar: true
+    filters:
+      friday_no_entry_after_utc: null
+    grid:
+      stop_k: [0.5, 1.0, 1.5, 2.0]   # noise units; at most 4 points, declared before any run
+    # fixed (as round 1): trail band only; lookback 14; checkpoints 10:00 ... 15:30; flat 16:00; holidays and
+    # early closes skipped; entries are exactly round 1's signals (a stopped-out trade is not re-entered
+    # until the setup is flat again and a new breakout fires).
+
 # Information only (review #1): too few trades for the 300-trade gate, so it is
 # reported against buy-and-hold on return, drawdown and Sharpe and logged as
 # kind: information. `atlas-research t0 info mnq_trend_filter_d1`.
@@ -184,3 +212,36 @@ information:
     momentum_sessions: 252
     round_trip_pts: {base: 1.625, stress: 2.0}  # base = the all-in market-in/market-out cost above
     r_unit_atr: 3.0               # per-trade R reported with 1R = 3 x daily ATR(14) at the decision
+
+# MNQ round 2 independent check (declared with round 2, before any 2018 run).
+# 2018 was loaded in round 1 only as indicator warm-up for the RSI(2) and
+# trend-filter runs; the noise-area runs loaded from 2019-01-01. No 2018 trade
+# was counted anywhere. `atlas-research --config ... t0 check <name>`.
+checks:
+  mnq_noise_area_r2_2018:
+    strategy: mnq_noise_area_r2_m5
+    params: {stop_k: CHOSEN}          # filled in with round 2's final_params (whole-dev pick) before the 2018 run
+    period: ["2018-01-01", "2019-01-01"]   # end exclusive; data begins 2018-01-02, so the 14-session sigma
+                                           # first exists in late January and no trade comes earlier
+    coverage:
+      reference_m1_bars_per_year: 342192   # median full year 2019-2024 of USATECHIDXUSD (round 1 data report)
+      min_frac: 0.70
+      min_rth_frac: 0.95                   # round 1's data rule: regular-session minutes quoted
+    price_checks:
+      "2018-12-31": 6329.96                # published Nasdaq-100 close; > 1% off means a price-scale error
+    pass_rules:                            # all must pass
+      min_expectancy_r: 0.0                # (a) average R after base costs > 0
+      beat_buy_and_hold: true              # (b) > exposure-matched buy-and-hold R
+      beat_random_p95: true                # (c) > random-entry p95 (50 runs)
+      min_trades: 150                      # (d)
+      min_all_in_expectancy_r: 0.0         # (e) average R at the 2.0 pt all-in Stress tier > 0
+      beat_random_direction_p95: true      # (f) > random-direction p95 (50 runs)
+  # Information only: round 1's original band-stop version on the same year. It cannot change any verdict.
+  mnq_noise_area_r1_2018_info:
+    strategy: mnq_noise_area_m5
+    params: {trail: band}
+    period: ["2018-01-01", "2019-01-01"]
+    coverage: {reference_m1_bars_per_year: 342192, min_frac: 0.70, min_rth_frac: 0.95}
+    price_checks: {"2018-12-31": 6329.96}
+    pass_rules: {min_expectancy_r: 0.0, beat_buy_and_hold: true, beat_random_p95: true, min_trades: 150,
+                 min_all_in_expectancy_r: 0.0, beat_random_direction_p95: true}

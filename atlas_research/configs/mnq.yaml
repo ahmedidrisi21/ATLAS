@@ -1,0 +1,186 @@
+# Phase T0 edge discovery for the CME Micro E-mini Nasdaq-100 future (MNQ).
+# Same harness, segments, walk-forward, gates and account placeholders as
+# mes.yaml; only the market, its costs and the strategies differ, plus three
+# extra gates from the owner's NQ evidence review (below). Results and the
+# written declaration: docs/mnq-candidates.md.
+#
+#   atlas-research --config atlas_research/configs/mnq.yaml data download --symbols USATECHIDXUSD --start 2018-01-01
+#   atlas-research --config atlas_research/configs/mnq.yaml data build    --symbols USATECHIDXUSD --start 2018-01-01
+#   atlas-research --config atlas_research/configs/mnq.yaml data coverage --symbols USATECHIDXUSD
+#   atlas-research --config atlas_research/configs/mnq.yaml t0 run --all
+#   atlas-research --config atlas_research/configs/mnq.yaml t0 info mnq_trend_filter_d1
+#
+# There is no futures history in the repo, so MNQ is proxied by Dukascopy's
+# Nasdaq-100 cash-index CFD (USATECHIDXUSD, index points). As for MES, the
+# proxy's mid price is kept and re-quoted at the future's one-tick spread: the
+# CFD's own spread is a dealer markup the future doesn't have.
+
+data:
+  source: dukascopy
+  root: data
+  raw_cache: data/raw/dukascopy
+  proxies:
+    MNQ: {source: USATECHIDXUSD, spread: 0.25}   # one MNQ tick
+
+segments:              # identical to mes.yaml / t0.yaml; the holdout stays locked
+  dev: ["2019-01-01", "2024-01-01"]
+  validation: ["2024-01-01", "2025-07-01"]
+  holdout_start: "2025-07-01"   # the review suggests a Jan 2025 holdout; ATLAS keeps its own
+
+walk_forward:
+  train_months: 12
+  test_months: 3
+  min_train_trades: 30
+
+costs:
+  spread_mult: 1.5         # §22 stress: the 1-tick spread is charged as 1.5 ticks
+  stress_spread_mult: 2.0  # §15: must stay positive at 2x spread (2 ticks)
+  # Index points per contract. MNQ: tick 0.25 pt = $0.50, $2 per point.
+  # Round turn $1.50 (NinjaTrader MNQ) = 0.75 pt. 1 tick slippage on every
+  # market fill: entries, stops, time exits. Profit targets are resting limit
+  # orders: no slippage. No swap. All-in round trip for a market-in,
+  # market-out trade: 0.75 + 0.375 (1.5 ticks of spread) + 0.50 = 1.625 pt.
+  per_symbol:
+    MNQ: {commission_rt: 0.75, entry_slippage: 0.25, stop_slippage: 0.25, exit_slippage: 0.25, swap_per_rollover: 0.0}
+  # The review's Stress tier: every trade is filled at the mid price and
+  # charged a flat 2.0 pt round trip, all in (spread, slippage, commission).
+  # Reported for every strategy and gated (> 0), as the review requires.
+  all_in_round_trip:
+    MNQ: 2.0
+
+exits:
+  rr: 2.0
+  friday_flatten_utc: "20:00"
+
+filters:
+  max_spread_to_stop: 0.20
+  after_open_minutes: 15
+  friday_no_entry_after_utc: "18:00"
+
+account:        # T0 placeholders, unchanged, so results compare with the MES and FX rounds
+  risk_pct: 0.40
+  firm_max_drawdown_pct: 10.0
+  firm_daily_loss_pct: 5.0
+  eval_days: 30
+
+gates:          # the mes.yaml gates, unchanged ...
+  min_oos_trades: 300
+  min_expectancy_r: 0.10
+  min_profit_factor: 1.25
+  max_dd_frac_of_firm: 0.60
+  max_daily_breach_prob: 0.02
+  min_dsr: 0.95
+  min_wfe: 0.50
+  max_year_share: 0.40
+  mc_sims: 10000
+  random_control_runs: 50
+  neighborhood: 0.20
+  # ... plus the review's own cheap checks (NQ review, "ATLAS validation protocol"):
+  same_sign_every_year: true     # every OOS calendar year's average R after costs > 0
+  random_direction_runs: 50      # same entries, stop distances and exits, coin-flip direction; must beat its p95
+
+budget:
+  experiments_per_strategy_per_month: 20
+
+# Data-quality rule, declared before the download (MES round 3 found big
+# Dukascopy coverage gaps before 2019). Reported per year before any backtest:
+# M1 bars against the median full year 2019-2024, and the share of regular-
+# session minutes (09:30-16:00 New York, trading days only) that have a quote.
+# A year under min_frac of the median, or under min_rth_frac of RTH minutes,
+# is flagged and reported. The T0 runs are not altered (as in MES rounds 1-2);
+# a flagged dev or validation year is named in the results.
+# Price checks: CFD mid at 16:00 New York against published Nasdaq-100 closes;
+# more than 1% off means a price-scale error, fixed in the loader and reported.
+data_checks:
+  symbol: USATECHIDXUSD
+  years: [2018, 2025]                 # 2018 is warmup only; 2025 ends 2025-06-30
+  reference_years: [2019, 2024]
+  min_frac: 0.70
+  min_rth_frac: 0.95
+  price_checks:
+    "2019-12-31": 8733.07
+    "2021-12-31": 16320.08
+    "2023-12-29": 16825.93
+    "2024-12-31": 21012.17
+
+# MNQ round 1 (declared 2026-10-06, before any Nasdaq-100 data was downloaded,
+# loaded or run). The rules are the review's; the grids are at most 4 points
+# and are fixed. Stops are fixed (not gridded) because for a time-exit trade
+# the stop sets 1R. Every grid point is a deflated-Sharpe trial, pooled with
+# every earlier trial of the same setup and of the setups under dsr_pool.
+strategies:
+  mnq_late_day_momentum_m30:
+    setup: late_day_momentum
+    bar: 30min
+    dsr_pool: [intraday_momentum]      # MES round 2 tested the S&P version
+    hypothesis: "NQ review #2 (Gao, Han, Li & Zhou 2018; Baltussen et al. 2021): the Nasdaq-100 return from the prior 16:00 New York close to 15:30 predicts the sign of the last half hour; trading 15:30 to 16:00 in that direction pays after MNQ costs."
+    symbols: [MNQ]
+    exits:
+      rr: null                    # time exit at 16:00 New York (plus the protective stop)
+      friday_flatten_utc: null    # flat by 16:00 the same day
+    filters:
+      friday_no_entry_after_utc: null
+    grid:
+      confirm: [none, last_half_hour]   # the review's variant: 15:00-15:30 must agree in sign
+    # fixed: r = close(15:30) - close(prior 16:00); entry at the 15:30 M30 close, exit 16:00 New York;
+    # stop 1.0 x M30 ATR(14) from the 15:30 close ("1 x average 30-minute range"); holidays and
+    # early-close days skipped (atlas_engine.futures.sessions.no_trade_days).
+  mnq_noise_area_m5:
+    setup: noise_area
+    bar: 5min
+    hypothesis: "NQ review #3 (Zarattini, Aziz & Barbon, Beat the Market): a half-hour close outside the gap-adjusted 14-day noise area around the 09:30 open continues; with a band (or band + TWAP) trailing exit and flat at 16:00 it pays after MNQ costs."
+    symbols: [MNQ]
+    exits:
+      rr: null
+      friday_flatten_utc: null
+      reenter_at_exit_bar: true   # an exit and an opposite entry at the same checkpoint both fill
+    filters:
+      friday_no_entry_after_utc: null
+    grid:
+      trail: [band, band_twap]    # band only; or the higher (long) / lower (short) of band and a TWAP stand-in for VWAP
+    # fixed: lookback 14 sessions; checkpoints at M5 closes 10:00, 10:30 ... 15:30 New York; flat at 16:00;
+    # protective stop at the opposite band at entry (sets 1R); holidays/early closes skipped.
+  mnq_opening_candle_m5:
+    setup: opening_candle
+    bar: 5min
+    dsr_pool: [opening_range_breakout]   # MES round 1 tested an S&P opening-range breakout
+    hypothesis: "NQ review #4 (Zarattini & Aziz; Krueger 2026 replication): the direction of the 09:30-09:35 New York candle continues; entering at 09:35 with the stop at the candle's far end, a 10R target or the 16:00 close pays after MNQ costs."
+    symbols: [MNQ]
+    exits:
+      rr: 10.0
+      friday_flatten_utc: null
+    filters:
+      friday_no_entry_after_utc: null
+    grid: {}                      # one point: the published rule
+    # fixed: dojis (|close - open| < 0.25 pt, one tick) skipped; minimum stop 4.0 pt (2 x the 2.0 pt
+    # Stress round trip); exit 16:00 New York; holidays/early closes skipped.
+  mnq_rsi2_pullback_d1:
+    setup: rsi2_pullback
+    bar: 30min                    # decides on the 16:00 New York M30 close; daily series built from 16:00 closes
+    warmup_days: 365              # loads 2018 for the 200-day average; no trade before 2019 is ever counted
+    benchmark: buy_and_hold
+    hypothesis: "NQ review #5 (Connors & Alvarez 2008): in an uptrend (close > 200-day SMA) a sharp short-term pullback (RSI(2) < 10, or 3 lower closes) is bought at the close and reverts within 5 sessions, paying after MNQ costs by more than exposure-matched buy-and-hold."
+    symbols: [MNQ]
+    exits:
+      rr: null
+      friday_flatten_utc: null    # holds 1-5 sessions, weekends included
+    filters:
+      friday_no_entry_after_utc: null
+    grid:
+      trigger: [rsi2, three_lower_closes]
+    # fixed: long only; enter at the 16:00 close; exit at the first 16:00 close above the 5-day SMA or with
+    # RSI(2) > 70, else at the 5th close after entry; disaster stop 3 x daily ATR(14) (sets 1R).
+
+# Information only (review #1): too few trades for the 300-trade gate, so it is
+# reported against buy-and-hold on return, drawdown and Sharpe and logged as
+# kind: information. `atlas-research t0 info mnq_trend_filter_d1`.
+information:
+  mnq_trend_filter_d1:
+    symbol: MNQ
+    hypothesis: "NQ review #1: long the Nasdaq-100 only when the 16:00 close is above its 200-day SMA and the 252-session return is positive (decided at the close, executed at the next 09:30 open), flat otherwise, has better risk-adjusted return than buy-and-hold."
+    period: ["2019-01-01", "2025-07-01"]     # dev + validation; holdout locked
+    warmup_start: "2018-01-01"
+    sma: 200
+    momentum_sessions: 252
+    round_trip_pts: {base: 1.625, stress: 2.0}  # base = the all-in market-in/market-out cost above
+    r_unit_atr: 3.0               # per-trade R reported with 1R = 3 x daily ATR(14) at the decision

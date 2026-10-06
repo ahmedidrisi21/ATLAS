@@ -122,16 +122,16 @@ class Clock:
 def signed_in(tmp_path, sse=False):
     srv, clock = FakeServer(sse), Clock()
     oauth = mcp.OAuth(mcp.TokenStore(tmp_path / "tok.json"), http=srv, now=clock)
-    req = oauth.begin("http://127.0.0.1:9999/callback")
+    req = oauth.begin("http://localhost:9999/callback")
     q = dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(req.url).query))
     srv.codes["code-1"] = q["code_challenge"]
-    oauth.finish(req, f"http://127.0.0.1:9999/callback?code=code-1&state={req.state}&iss={ISSUER}")
+    oauth.finish(req, f"http://localhost:9999/callback?code=code-1&state={req.state}&iss={ISSUER}")
     return srv, clock, oauth
 
 
 def test_the_sign_in_link_uses_pkce_the_mcp_scope_and_this_server_as_the_audience(tmp_path):
     srv = FakeServer()
-    req = mcp.OAuth(mcp.TokenStore(tmp_path / "t.json"), http=srv).begin("http://127.0.0.1:9999/callback")
+    req = mcp.OAuth(mcp.TokenStore(tmp_path / "t.json"), http=srv).begin("http://localhost:9999/callback")
     assert req.url.startswith("https://web.ninjatrader.com/oauth?env=demo&")
     q = dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(req.url).query))
     assert q["code_challenge_method"] == "S256" and q["scope"] == "mcp:connect" and q["resource"] == RESOURCE
@@ -149,12 +149,12 @@ def test_atlas_has_no_route_to_the_live_mcp_server(tmp_path):
 def test_a_sign_in_answer_from_another_sign_in_or_server_is_refused(tmp_path):
     srv = FakeServer()
     oauth = mcp.OAuth(mcp.TokenStore(tmp_path / "t.json"), http=srv)
-    req = oauth.begin("http://127.0.0.1:9999/callback")
-    for url, why in [("http://127.0.0.1:9999/callback?code=c&state=other", "state mismatch"),
-                     (f"http://127.0.0.1:9999/callback?code=c&state={req.state}&iss=https://evil.example", "unexpected"),
-                     ("http://127.0.0.1:9999/callback?error=access_denied", "access_denied"),
-                     (f"http://127.0.0.1:9999/callback?state={req.state}", "no sign-in code"),
-                     (f"http://127.0.0.1:9999/callback?code=wrong&state={req.state}", "did not issue")]:
+    req = oauth.begin("http://localhost:9999/callback")
+    for url, why in [("http://localhost:9999/callback?code=c&state=other", "state mismatch"),
+                     (f"http://localhost:9999/callback?code=c&state={req.state}&iss=https://evil.example", "unexpected"),
+                     ("http://localhost:9999/callback?error=access_denied", "access_denied"),
+                     (f"http://localhost:9999/callback?state={req.state}", "no sign-in code"),
+                     (f"http://localhost:9999/callback?code=wrong&state={req.state}", "did not issue")]:
         with pytest.raises(mcp.SignInNeeded, match=why):
             oauth.finish(req, url)
     assert not (tmp_path / "t.json").exists()
@@ -250,7 +250,7 @@ def test_the_cli_signs_in_with_a_pasted_address(tmp_path, monkeypatch):
         def readline(self):
             q = dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(printed[1].strip()).query))
             srv.codes["code-9"] = q["code_challenge"]
-            return f"http://127.0.0.1:5555/callback?code=code-9&state={q['state']}\n"
+            return f"http://localhost:5555/callback?code=code-9&state={q['state']}\n"
 
     args = argparse.Namespace(action="login", state=str(tmp_path), port=5555, paste=True)
     engine_cli.ninjatrader_mcp(args, stdin=PastedAddress(), out=lambda s: printed.extend(s.split("\n\n")))

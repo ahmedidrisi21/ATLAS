@@ -360,11 +360,11 @@ How ATLAS could use them, within AGENTS.md:
 | Part | State |
 | --- | --- |
 | Discovery: protected-resource metadata names `https://demo.tradovateapi.com`; its metadata gives `web.ninjatrader.com/oauth?env=demo`, `/auth/oauthtoken`, `/auth/register`, PKCE S256, public clients | VERIFIED (live probe 2026-10-06) |
-| Registration of ATLAS as a public client with a `http://127.0.0.1:<port>/callback` return address | VERIFIED (accepted, and the sign-in page loads) |
-| Code exchange (form body, PKCE verifier, `resource`) | VERIFIED in docs; not yet run against the server |
-| Refresh (JSON body with `resource`, rotating refresh token, keep the saved token on failure) | VERIFIED in docs (mcp/authentication); not yet run |
-| Streamable HTTP JSON-RPC, session id, re-initialize after an idle session ends, one retry after a 401 | Per the MCP specification; not yet run |
-| A free simulation login is accepted | UNVERIFIED until the first sign-in |
+| Registration with a `http://localhost:<port>/callback` return address. The server answers every registration with the same shared public client ("NinjaTrader MCP") and refuses addresses off its allow list. Two sign-ins with a `127.0.0.1` address ended in `access_denied` (cause not certain); `localhost` worked | VERIFIED (2026-10-06) |
+| Code exchange (form body, PKCE verifier, `resource`) | VERIFIED (first sign-in, 2026-10-06, free practice account) |
+| Refresh (JSON body with `resource`, rotating refresh token, keep the saved token on failure) | VERIFIED (live refresh, 2026-10-06) |
+| Streamable HTTP JSON-RPC, session id, re-initialize after an idle session ends, one retry after a 401 | Initialize, tools/list (27 tools) and a read call VERIFIED; the idle-session restart is not yet seen live |
+| A free simulation login is accepted, with no paid API add-on | VERIFIED (2026-10-06) |
 | The shape of every tool's answer | UNVERIFIED: `atlas-engine ninjatrader-mcp capture` records them (read tools only) before the venue is written |
 
 What ATLAS lets the connection do, enforced in the client, whatever the

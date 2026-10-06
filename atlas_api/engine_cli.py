@@ -170,7 +170,7 @@ def ninjatrader_mcp(args, stdin=None, out=print) -> None:
     try:
         if args.action == "login":
             port = args.port or mcp.free_port()
-            req = oauth.begin(f"http://127.0.0.1:{port}/callback")
+            req = oauth.begin(mcp.REDIRECT.format(port=port))
             out("Open this link in a desktop browser, sign in to NinjaTrader and allow ATLAS:\n\n" + req.url + "\n")
             out("On the consent screen allow Trade, Market Data and the View permissions only, not Manage Risk "
                 "Settings or Alerts. Under Risk limits list MES only, with a max total exposure of 2.")
@@ -178,7 +178,7 @@ def ninjatrader_mcp(args, stdin=None, out=print) -> None:
                 out("\nWhen the browser lands on a page that will not load, copy its full address and paste it here:")
                 url = (stdin or sys.stdin).readline()
             else:
-                out(f"\nWaiting for the browser to come back to 127.0.0.1:{port} ...")
+                out(f"\nWaiting for the browser to come back to localhost:{port} ...")
                 url = mcp.wait_for_callback(port)
             oauth.finish(req, url)
             out("Signed in. Run `atlas-engine ninjatrader-mcp check` next.")

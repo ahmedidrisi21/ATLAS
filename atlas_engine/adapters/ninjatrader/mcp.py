@@ -44,6 +44,9 @@ from .client import NinjaTraderError
 SERVERS = {"demo": "https://mcp-demo.tradovateapi.com/mcp"}  # no live entry: demo first (docs/futures.md)
 PROTOCOL_VERSION = "2025-06-18"
 SCOPE = "mcp:connect"
+# NinjaTrader accepts only allow-listed return addresses. "localhost" worked on 2026-10-06; two earlier tries with
+# "127.0.0.1" ended in access_denied (cause not certain: the device used may also have mattered).
+REDIRECT = "http://localhost:{port}/callback"
 REFRESH_BEFORE_S = 10 * 60
 CLIENT_NAME = "ATLAS engine"
 
@@ -346,7 +349,7 @@ def _from_stream(raw: bytes, want_id) -> dict:
 
 
 def wait_for_callback(port: int, timeout_s: float = 600.0) -> str:
-    """Listen on 127.0.0.1 for the browser's return from the sign-in page; returns the full address."""
+    """Listen on this computer (``localhost``) for the browser's return from the sign-in page; returns the full address."""
     got: dict = {}
 
     class Handler(http.server.BaseHTTPRequestHandler):
@@ -355,7 +358,7 @@ def wait_for_callback(port: int, timeout_s: float = 600.0) -> str:
                 self.send_response(404)
                 self.end_headers()
                 return
-            got["url"] = f"http://127.0.0.1:{port}{self.path}"
+            got["url"] = REDIRECT.format(port=port).replace("/callback", "") + self.path
             self.send_response(200)
             self.send_header("Content-Type", "text/plain; charset=utf-8")
             self.end_headers()

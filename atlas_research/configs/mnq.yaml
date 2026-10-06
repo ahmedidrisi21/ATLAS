@@ -93,11 +93,25 @@ budget:
 # more than 1% off means a price-scale error, fixed in the loader and reported.
 data_checks:
   symbol: USATECHIDXUSD
-  years: [2018, 2025]                 # 2018 is warmup only; 2025 ends 2025-06-30
+  years: [2013, 2025]                 # 2013-2017: round 3's check years; 2018 the 2018 check; 2025 ends 2025-06-30
   reference_years: [2019, 2024]
   min_frac: 0.70
   min_rth_frac: 0.95
   price_checks:
+    "2013-01-31": 2731.53               # round 3 (2013-2017). The Dec 31 quotes of 2014 and 2015 stop at
+    "2013-12-31": 3592.00               # 13:00-14:00 New York (dealer holiday hours), so month-ends with a
+    "2014-06-30": 3849.48               # full session were added to the report as well
+    "2014-09-30": 4049.45
+    "2014-12-31": 4236.28
+    "2015-06-30": 4396.76
+    "2015-09-30": 4181.06
+    "2015-11-30": 4664.51
+    "2015-12-31": 4593.27
+    "2016-01-29": 4279.17
+    "2016-12-30": 4863.62
+    "2017-01-31": 5116.77
+    "2017-12-29": 6396.42
+    "2018-12-31": 6329.96               # the 2018 check
     "2019-12-31": 8733.07
     "2021-12-31": 16320.08
     "2023-12-29": 16825.93

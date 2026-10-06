@@ -867,3 +867,71 @@ on) stays locked; the check period ends 2017-12-31.
   declared.
 - `atlas_research/configs/mnq.yaml`: the four checks above under `checks:`.
 - `tests/research/test_mnq_round3.py`.
+
+## Round 3 data quality (reported after the declaration commit `925a6b4`, before any 2013-2017 backtest)
+
+The download (`data download --symbols USATECHIDXUSD --start 2013-01-01 --end
+2017-12-31`) took three passes: the first ended with 12 day-files refused by
+Dukascopy (HTTP 503), the second with 1, the third fetched the last one. All
+3,652 day-files (1,826 days × bid and ask) are in; `data build` gave 1,176,943
+one-minute bars. `atlas-research --config atlas_research/configs/mnq.yaml
+data coverage` (its `data_checks:` now span 2013-2025):
+
+| Year | M1 bars | % of median 2019-2024 (342,192) | Trading days | Days with RTH quotes | RTH minutes quoted | Quoted hours (New York) | Declared rule | RTH-only rule (information) |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 2013 | 194,528 | 56.8% | 248 | 180 | 67.9% | ~23 h, but 68 trading days with no regular-session quote | **excluded** (both) | excluded |
+| 2014 | 316,579 | 92.5% | 248 | 246 | 96.8% | ~23 h | **included** | included |
+| 2015 | 239,268 | 69.9% | 248 | 248 | 99.7% | 02:00-16:00 | **excluded** (M1 count) | included |
+| 2016 | 215,422 | 63.0% | 250 | 250 | 99.98% | 02:00-16:00 | **excluded** (M1 count) | included |
+| 2017 | 211,146 | 61.7% | 249 | 249 | 99.7% | 02:00-16:00 | **excluded** (M1 count) | included |
+
+**The declared rule keeps one year, 2014.** 2013 fails both parts: 68 trading
+days have no regular-session quote at all (February to May is mostly
+missing). 2015, 2016 and 2017 fail only the bar count. From 2015 the CFD was
+quoted only from 02:00 to 16:00 New York, so the overnight bars are missing,
+but the regular session (the only part this strategy trades or reads, up to
+the 16:00 close it uses as the next day's prior close) is 99.7-99.98% quoted.
+2015 misses the 70% line by 0.1 point (69.9%).
+
+That is exactly the case the declaration foresaw. So, as declared:
+- **The verdict for each version is the declared check: 2014 only.** It can
+  still meet (d), 150 trades, in one year. (g) is "at most one included year
+  ≤ 0", which a single year can't fail by itself, so with one year included,
+  (a) carries the sign.
+- **The regular-session-only runs (2014-2017, four years) are made as
+  information**, because the declared rule excludes 2015-2017, which the
+  regular-session rule alone keeps. They can't change either verdict. They
+  are the more useful evidence about the strategy, and the write-up says so,
+  but the verdict stays the declared one.
+
+**Price scale: confirmed.** The CFD mid at the last quote before 16:00 New
+York against published Nasdaq-100 closes:
+
+| Date | CFD mid | Published | Deviation |
+| --- | --- | --- | --- |
+| 2013-01-31 | 2,731.82 | 2,731.53 | +0.01% |
+| 2013-12-31 | 3,591.18 | 3,592.00 | −0.02% |
+| 2014-06-30 | 3,850.71 | 3,849.48 | +0.03% |
+| 2014-09-30 | 4,052.09 | 4,049.45 | +0.07% |
+| 2014-12-31 | 4,273.66 | 4,236.28 | +0.88% (stale, see below) |
+| 2015-06-30 | 4,396.49 | 4,396.76 | −0.01% |
+| 2015-09-30 | 4,174.37 | 4,181.06 | −0.16% |
+| 2015-11-30 | 4,668.43 | 4,664.51 | +0.08% |
+| 2015-12-31 | 4,633.13 | 4,593.27 | +0.87% (stale, see below) |
+| 2016-01-29 | 4,274.10 | 4,279.17 | −0.12% |
+| 2016-12-30 | 4,866.20 | 4,863.62 | +0.05% |
+| 2017-01-31 | 5,117.10 | 5,116.77 | +0.01% |
+| 2017-12-29 | 6,398.60 | 6,396.42 | +0.03% |
+
+All five declared dates are within the 1% limit, so no run is stopped. But two
+of them, 2014-12-31 and 2015-12-31, pass only because the limit is loose: on
+both New Year's Eves Dukascopy's quotes stop at 13:00-14:00 New York (dealer
+holiday hours), and the index fell about 1% in the afternoon on both days.
+Those two checks compare a stale midday quote with the close, so they don't
+test the scale. The eight month-end dates above, each a full session, were
+added to the data report (`data_checks:` only; the checks' declared
+`price_checks` are unchanged) and agree within 0.16%. The scale is right.
+Published closes are from Nasdaq's index history, as listed by digrin.com.
+
+The CFD's own median spread was 2.2 points in 2013-2014 and 1.0-1.1 points in
+2015-2017. It isn't charged, because the mid is re-quoted at one MNQ tick.

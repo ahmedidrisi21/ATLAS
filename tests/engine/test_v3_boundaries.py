@@ -135,5 +135,5 @@ def test_the_broker_neutral_order_is_built_only_by_execution():
                                                           "atlas_research")
              if "atlas_engine.adapters.orders" in _imports(p) or ".orders" in _imports(p)}
     allowed = {"atlas_engine/execution/futures.py", "atlas_engine/adapters/futures_venue.py",
-               "atlas_engine/adapters/ninjatrader/adapter.py"}
+               "atlas_engine/adapters/ninjatrader/adapter.py", "atlas_engine/adapters/ninjatrader/mcp_venue.py"}
     assert users <= allowed, users - allowed

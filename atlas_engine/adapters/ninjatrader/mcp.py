@@ -63,6 +63,10 @@ class McpError(NinjaTraderError):
     """The MCP server did not give a usable answer, or the call was refused by ATLAS."""
 
 
+class NoAnswer(McpError):
+    """A call got no usable answer (network, server error): a write may or may not have reached the platform."""
+
+
 class SignInNeeded(McpError):
     """No usable token: the operator must sign in again (``atlas-engine ninjatrader-mcp login``)."""
 
@@ -263,7 +267,7 @@ class McpClient:
         try:
             status, h, raw = self.http("POST", self.oauth.resource, headers, json.dumps(msg).encode(), self.timeout)
         except OSError as e:
-            raise McpError(f"NinjaTrader MCP server unreachable ({type(e).__name__})") from None
+            raise NoAnswer(f"NinjaTrader MCP server unreachable ({type(e).__name__})") from None
         if status == 401 and not retried:
             return self._send(msg, retried=True)
         if status == 404 and self.session_id and msg.get("method") != "initialize":
@@ -275,7 +279,8 @@ class McpClient:
         if status == 202:
             return None
         if status != 200:
-            raise McpError(f"NinjaTrader MCP server answered HTTP {status}")
+            raise (NoAnswer if status >= 500 or status == 429 else McpError)(
+                f"NinjaTrader MCP server answered HTTP {status}")
         if h.get("mcp-session-id"):
             self.session_id = h["mcp-session-id"]
         if "text/event-stream" in h.get("content-type", ""):
@@ -290,7 +295,7 @@ class McpClient:
         if out.get("error"):
             raise McpError(f"NinjaTrader MCP {method} failed: {out['error'].get('message', 'error')}")
         if "result" not in out:
-            raise McpError(f"NinjaTrader MCP {method} gave no result")
+            raise NoAnswer(f"NinjaTrader MCP {method} gave no result")
         return out["result"]
 
     def initialize(self) -> dict:

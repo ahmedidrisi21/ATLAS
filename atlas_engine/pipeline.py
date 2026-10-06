@@ -72,6 +72,7 @@ class DecisionSettings:
     max_target_r: float = 10.0
     max_spread_to_stop: float = 0.20  # §16 edge filter, as in research
     extra_cost_r: float = 0.0  # slippage allowance added to commission in C_R
+    max_quote_age_s: float = 30.0  # a quote older than this is not live (a delayed data feed is ~600 s behind)
     jev_model: str = "jev-1.13.0"  # §7: a pinned TypeSafe model ID, never an alias
     defaults_used: tuple[str, ...] = ()
 
@@ -80,7 +81,7 @@ class DecisionSettings:
 
 
 KEYS = {"ev_min_r", "model_timeout_ms", "min_target_r", "max_target_r", "max_spread_to_stop", "extra_cost_r",
-        "jev_model"}
+        "max_quote_age_s", "jev_model"}
 TEXT_KEYS = {"jev_model"}
 CALIBRATED_MODELS = {"gbm", "jev"}  # models whose raw output must be calibrated before a real-money trade (§24)
 
@@ -102,6 +103,7 @@ def load_decision_settings(root: str | Path = "config") -> DecisionSettings:
               (0 < s.min_target_r <= s.max_target_r <= 20, "decision needs 0 < min_target_r <= max_target_r <= 20"),
               (0 < s.max_spread_to_stop <= 0.5, "decision.max_spread_to_stop must be in (0, 0.5]"),
               (s.extra_cost_r >= 0, "decision.extra_cost_r must be >= 0"),
+              (0 < s.max_quote_age_s <= 120, "decision.max_quote_age_s must be in (0, 120]"),
               (bool(re.fullmatch(r"jev-\d+\.\d+\.\d+", s.jev_model)),
                "decision.jev_model must be a pinned version such as jev-1.13.0, not an alias")]
     bad = [m for ok, m in checks if not ok]
@@ -255,6 +257,11 @@ class DecisionPipeline:
             block = contract.entry_block(ctx.now, ctx.roll_days)
             if block:
                 return self._fail(d, "market", [block], contract=contract.to_dict())
+        age = (ctx.now - ctx.tick.time).total_seconds() if getattr(ctx.tick, "time", None) else None
+        if age is not None and age > self.settings.max_quote_age_s:
+            # A delayed feed (or a stalled one) prices a trade the market has already moved past.
+            return self._fail(d, "market", ["quote_not_live"], quote_age_s=round(age, 1),
+                              max_quote_age_s=self.settings.max_quote_age_s)
         stop_dist = abs(d.entry - i.stop)
         spread = ctx.tick.spread
         detail = {"bid": ctx.tick.bid, "ask": ctx.tick.ask, "spread_to_stop": round(spread / stop_dist, 4)}

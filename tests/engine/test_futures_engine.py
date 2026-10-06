@@ -75,6 +75,14 @@ def test_the_exchange_calendar_decides_whether_the_market_is_open(tmp_path, when
     assert out["decision"] == "REJECT" and out["pipeline"]["failed_stage"] == "market" and reason in out["reasons"]
 
 
+def test_a_delayed_quote_takes_no_new_entry(rig):
+    """A delayed data feed (NinjaTrader's free one is ~10 min behind) must not price a trade."""
+    rig.clock.advance(seconds=600)
+    out = rig.engine.submit(rig.signal())
+    assert out["decision"] == "REJECT" and out["pipeline"]["failed_stage"] == "market"
+    assert out["reasons"] == ["quote_not_live"]
+
+
 def test_a_contract_due_to_roll_takes_no_new_entry(tmp_path):
     r = build(tmp_path, Clock(dt.datetime(2026, 12, 15, 15, 0, tzinfo=UTC)))
     r.step()
@@ -85,6 +93,7 @@ def test_a_contract_due_to_roll_takes_no_new_entry(tmp_path):
 
 def test_no_entries_close_to_the_firms_flat_by_time(rig):
     rig.clock.t = dt.datetime(2026, 10, 6, 19, 45, tzinfo=UTC)  # 14:45 CT, 25 min before 15:10
+    rig.quote(5000.0, 5000.25)  # a live quote at the new time
     out = rig.engine.submit(rig.signal())
     assert out["decision"] == "REJECT" and out["pipeline"]["failed_stage"] == "prop"
     assert "prop_outside_trading_hours" in out["reasons"]

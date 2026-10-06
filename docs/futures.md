@@ -353,7 +353,7 @@ How ATLAS could use them, within AGENTS.md:
   broker-side backstop independent of ATLAS, whichever route places orders,
   if the engine's connection is authorized through the same OAuth.
 
-### The MCP route to a free demo account (connection BUILT 2026-10-06; venue NOT IMPLEMENTED)
+### The MCP route to a free demo account (connection and venue BUILT 2026-10-06)
 
 `atlas_engine/adapters/ninjatrader/mcp.py`, used only by the engine host.
 
@@ -365,7 +365,9 @@ How ATLAS could use them, within AGENTS.md:
 | Refresh (JSON body with `resource`, rotating refresh token, keep the saved token on failure) | VERIFIED (live refresh, 2026-10-06) |
 | Streamable HTTP JSON-RPC, session id, re-initialize after an idle session ends, one retry after a 401 | Initialize, tools/list (27 tools) and a read call VERIFIED; the idle-session restart is not yet seen live |
 | A free simulation login is accepted, with no paid API add-on | VERIFIED (2026-10-06) |
-| The shape of every tool's answer | UNVERIFIED: `atlas-engine ninjatrader-mcp capture` records them (read tools only) before the venue is written |
+| The shape of every tool's answer | VERIFIED for the read tools (recorded in `docs/ninjatrader-mcp-capture/`, demo, 2026-10-06); write answers from `describe` only, until the first practice order |
+| The venue's reads (account, contract, quote, orders, fills, positions) against the real server | VERIFIED (2026-10-06); its writes are tested on a stand-in only |
+| Quotes without a CME data subscription | `dataFeedMode: Delayed`, about 600 s behind (VERIFIED). The pipeline refuses a quote older than `decision.max_quote_age_s` (default 30 s) with `quote_not_live`, so the practice account cannot trade on them |
 
 What ATLAS lets the connection do, enforced in the client, whatever the
 consent screen grants:
@@ -385,13 +387,19 @@ Operator steps: `atlas-engine ninjatrader-mcp login --state <dir>` (add
 trade, never Manage Risk Settings or Alerts, and set the connection's risk
 limits: MES only, max total exposure 2.
 
-How the venue will map onto the tools (to confirm against the capture):
-quotes and bars from `market_snapshot` / `market_history`; the entry bracket
-as `place_order` with signed offsets computed from the engine's absolute stop
-and target; protection repair with `modify_order` (absolute prices); exits
-with `close_position` only for ATLAS's own contract; reconciliation from
-`my_portfolio` and `order_history`; after a `TrackingTimeout`, look the order
-up in `order_history` before ever sending again (there is no client order ID).
+The venue (`atlas_engine/adapters/ninjatrader/mcp_venue.py`, `--broker ninjatrader-mcp`) and where it
+differs from the REST adapter:
+
+- No client order ID on `place_order`: after a lost answer the entry is found by contract, side, quantity
+  and time (`FuturesVenue.adopt`); an ambiguous match HALTs reconciliation.
+- Bracket legs are offsets from the entry's fill: ATLAS sends them from the quote it decided on, then moves
+  the legs onto the decided prices with `modify_order` (absolute prices) once the entry has filled.
+- Legs appear only after the entry fills; the protection check picks up late ones instead of replacing them.
+- A leg's `bracket.ocoId` is its sibling's id; the OCO group is the smaller id.
+- No standalone linked stop and target, so a position whose legs are gone is closed and the engine HALTs.
+- `close_position` is never called (it would flatten the operator's contracts too); exits are reduce-only
+  market orders. `update_risk_settings` and the alert tools are refused by the client.
+- Bars (`market_history`) are NOT wired: the engine's bar path is built for MT5's server clock.
 
 ## Order lifecycle and brackets
 

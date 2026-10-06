@@ -25,6 +25,9 @@ the engine's inbox, never API calls.
                     environment: ATLAS_NINJATRADER_USER, _PASSWORD, _APP_ID, _APP_VERSION, _CID, _SEC,
                     _DEVICE_ID; ATLAS_NINJATRADER_ENV is demo (default) or live; ATLAS_NINJATRADER_ACCOUNT
                     picks the account when the login has several.
+    ninjatrader-mcp  NinjaTrader's MCP server, demo only: the free route (no funded account or API add-on).
+                    Sign in first with ``atlas-engine ninjatrader-mcp login --state <dir>``; the sign-in is
+                    kept in the state directory.
     fake-ninjatrader  the in-process NinjaTrader API stand-in, for drills (alias fake-tradovate)
 
 The fakes use no network, no broker and send no orders anywhere.
@@ -82,7 +85,7 @@ def build_engine(args):
     cfg = load_engine_config(args.config, require_read_only=not args.allow_writable_config)
     settings = load_execution_settings(args.config)
     broker = BROKER_ALIASES.get(args.broker, args.broker)
-    platform = "ninjatrader" if broker in ("ninjatrader", "fake-ninjatrader") else "mt5"
+    platform = "ninjatrader" if broker in ("ninjatrader", "ninjatrader-mcp", "fake-ninjatrader") else "mt5"
     if settings.platform != platform:
         raise SystemExit(f"--broker {args.broker} needs execution.platform: {platform} in atlas.yaml "
                          f"(it says {settings.platform})")
@@ -146,6 +149,14 @@ def ninjatrader_venue(broker: str, cfg, settings, state: Path, env: dict | None 
         raise SystemExit("execution.platform ninjatrader trades futures; atlas.yaml lists no futures symbols")
     common = dict(ledger_path=state / "ninjatrader-brackets.json", commission_per_contract=settings.commission_per_lot,
                   poll_s=settings.broker_poll_s)
+    if broker == "ninjatrader-mcp":  # the free demo route: NinjaTrader's MCP server, demo only
+        from atlas_engine.adapters.ninjatrader import mcp
+        from atlas_engine.adapters.ninjatrader.mcp_venue import NinjaTraderMcpAdapter
+
+        oauth = mcp.OAuth(mcp.TokenStore(state / "ninjatrader-mcp-token.json"))
+        venue = NinjaTraderMcpAdapter(mcp.McpClient(oauth, orders=True), pins,
+                                      account_name=env.get("ATLAS_NINJATRADER_ACCOUNT"), **common)
+        return venue, "ninjatrader-mcp-demo"
     if broker == "ninjatrader":
         try:
             client = NinjaTraderClient(env.get("ATLAS_NINJATRADER_ENV", "demo"), Credentials.from_env(env))
@@ -231,7 +242,8 @@ def main(argv: list[str] | None = None) -> None:
     r.add_argument("--state", required=True, help="engine state directory (journal, inbox, alerts)")
     r.add_argument("--tokens", required=True, help="engine token hash file")
     r.add_argument("--operator-key", help="operator HMAC key file (mode 600)")
-    r.add_argument("--broker", choices=["mt5", "fake", "ninjatrader", "fake-ninjatrader", *BROKER_ALIASES], default="mt5")
+    r.add_argument("--broker", choices=["mt5", "fake", "ninjatrader", "ninjatrader-mcp", "fake-ninjatrader",
+                                        *BROKER_ALIASES], default="mt5")
     r.add_argument("--host", default="127.0.0.1")
     r.add_argument("--port", type=int, default=8742)
     r.add_argument("--poll", type=float, default=1.0, help="seconds between engine steps")

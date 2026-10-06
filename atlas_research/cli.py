@@ -5,6 +5,7 @@
     atlas-research data quality  --symbols EURUSD GBPUSD
     atlas-research data import-mt5 --symbol EURUSD --file EURUSD_M1.csv
     atlas-research t0 run --all
+    atlas-research t0 check <name>
     atlas-research t1 run trend_pullback
     atlas-research t2 run trend_pullback
     atlas-research prop-mc --trades research/runs/<run>/oos_trades.csv
@@ -110,6 +111,27 @@ def cmd_t0(args, cfg) -> None:
             print("failed gates:\n  " + "\n  ".join(failed))
 
 
+def cmd_check(args, cfg) -> None:
+    from .check import run_check
+
+    root = Path(args.data_root or cfg["data"]["root"])
+    registry_path = Path(args.registry)
+    if (root / SYNTHETIC_MARKER).exists() and registry_path.resolve() == DEFAULT_REGISTRY.resolve():
+        sys.exit("refusing to record synthetic-data runs in the real experiment registry; pass --registry")
+    load = lambda sym, start, end: rdata.load_research_m1(root, cfg, sym, start, end)  # noqa: E731
+    res = run_check(args.check, cfg, load, Registry(registry_path), Path(args.out))
+    print(f"\n{res['experiment_id']}: {'PASS' if res['passed'] else 'FAIL'} (frozen {res['final_params']})")
+    for sym, rows in res["coverage"].items():
+        for c in rows:
+            print(f"  {sym} {c['year']}: {c['m1_bars']:>7,} M1 ({c['m1_frac']:.0%})  {c['h4_bars']:>5,} H4 ({c['h4_frac']:.0%})"
+                  f"  {'included' if c['included'] else 'EXCLUDED'}")
+    for y in res["years"]:
+        print(f"  {y['year']}: {y['trades']:>4} trades  {y['expectancy_r']:+.3f} R  win {y['win_rate']:.1%}  max DD {y['max_dd_r']:.1f} R")
+    for g in res["pass_rules"]:
+        print(f"  {'pass' if g['passed'] else 'FAIL'}  {g['gate']}: {g['value']:+.3f} ({g['rule']})")
+    print(json.dumps(res["kanban_metadata"], indent=2, default=str))
+
+
 def cmd_t1(args, cfg) -> None:
     from .t1 import run_t1
 
@@ -203,6 +225,12 @@ def main(argv: list[str] | None = None) -> None:
     r.add_argument("--registry", default=str(DEFAULT_REGISTRY))
     r.add_argument("--out", default="research/runs")
     r.set_defaults(fn=cmd_t0)
+    r = t.add_parser("check", help="one frozen-parameter run over a declared period (config `checks:`)")
+    r.add_argument("check")
+    r.add_argument("--data-root")
+    r.add_argument("--registry", default=str(DEFAULT_REGISTRY))
+    r.add_argument("--out", default="research/runs")
+    r.set_defaults(fn=cmd_check)
 
     t1 = sub.add_parser("t1", help="exit research: §18 exit variants vs the fixed 2R baseline").add_subparsers(dest="cmd", required=True)
     r = t1.add_parser("run")

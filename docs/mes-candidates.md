@@ -457,3 +457,223 @@ for s in mes_intraday_momentum_m30 mes_overnight_drift_h1 mes_channel_breakout_l
   atlas-research --config atlas_research/configs/mes.yaml t0 run $s
 done
 ```
+
+# Round 3: independent check on 2013-2018
+
+## Declaration (written 2026-10-06, before any 2013-2018 data was downloaded or loaded)
+
+Round 2's closest candidate, the long-only H4 channel breakout
+(`mes_channel_breakout_long_h4`), made +0.145 R after costs on 231
+out-of-sample trades from 2019 to mid-2025 and failed 7 of 15 gates. One of
+its problems is that all of its evidence comes from one stretch of market
+history. Round 3 tests it once on six earlier years that no test in this repo
+has used: **2013-01-01 to 2018-12-31.** It is a confirmation test, not a
+search. Nothing about the strategy may change.
+
+**Frozen parameters.** These are the final parameters round 2 selected on its
+dev period (run `mes_channel_breakout_long_h4-20261006-042013-7cd8a4` in
+`research/experiments.jsonl`): `channel: 20`, `sl_atr: 1.5`, `sides: long`,
+with the `channel_breakout` setup's other defaults, on 4-hour bars. Exits are
+round 2's: a 2R profit target, the stop, and a flatten on Friday at 20:00 UTC.
+The edge filters are unchanged: spread at most 20% of the stop, no entry in the
+first 15 minutes after the open, no Friday entry after 18:00 UTC. There is no
+grid, no walk-forward and no re-selection. The strategy runs once over the
+whole period.
+
+**Same data recipe and costs.** MES is again proxied by Dukascopy's
+`USA500IDXUSD` (S&P 500 cash-index CFD). Its mid price is re-quoted at the
+future's 1-tick spread. The costs are the same as rounds 1 and 2: spread ×1.5,
+$1.50 round turn (0.30 pt), and 1 tick of slippage on every market fill. The
+indicators warm up on the first bars of January 2013. No data before 2013 is
+loaded.
+
+**Data-quality rule, declared before the download.** Dukascopy's index CFD
+history before about 2016 may be thin, have gaps or keep different trading
+hours. The reference is the median full year of this series over 2019-2024,
+which round 1 and 2 already used: 1,600 non-empty H4 bars and 334,700 one-minute
+bars. **A year with fewer than 70% of either is excluded and reported.** That
+is fewer than 1,120 H4 bars or fewer than 234,290 one-minute bars. Its trades
+are dropped, and it is left out of the benchmark windows. Coverage is reported
+for every year. The price scale is checked against the published S&P 500
+closes on 2013-01-02 (1,462.42), 2015-12-31 (2,043.94) and 2018-12-31
+(2,506.85). A CFD close more than 1% away would mean the scale is wrong. That
+would be fixed in the loader and reported. It would not count as a tuning
+change.
+
+**Pass rule, declared up front.** The check passes only if all five hold over
+the included years:
+
+| Rule | Threshold |
+| --- | --- |
+| (a) Average R after costs | > +0.10 |
+| (b) Beats exposure-matched buy-and-hold | average R minus the round-2 `buy_and_hold_r` benchmark > 0. The buy-and-hold rate is the mean log return per calendar hour over the included years, charged no costs. |
+| (c) Beats random long entries | average R above the 95th percentile of 50 random long-entry runs, which use the same count, stops and exits (round 2's `random_control`, seed 0) |
+| (d) Trade count | at least 150 trades |
+| (e) No single year carries it | no year makes more than 50% of the total profit. A total of zero or less fails. |
+
+The T0 gate table is also reported, for information only. Gates that need a
+dev and validation split or a walk-forward don't apply to a single frozen run
+and are marked n/a. The check does not add deflated-Sharpe trials, since
+nothing is selected. Its deflated Sharpe uses the 16 `channel_breakout`
+trials already in the registry. The run is logged in
+`research/experiments.jsonl` whether it passes or fails. The holdout (July 2025
+on) stays locked; this period ends 2018-12-31.
+
+The same declaration is in `atlas_research/configs/mes.yaml` under `checks:`.
+
+### Addendum to the declaration (written after the download and data-quality report, before any 2013-2018 backtest)
+
+The data-quality report (bar counts and trading hours only, no trades or R)
+shows that the declared coverage rule removes four of the six years:
+
+| Year | Days with data | M1 bars (% of 334,700) | H4 bars (% of 1,600) | UTC hours quoted | Rule |
+| --- | --- | --- | --- | --- | --- |
+| 2013 | 203 | 192,401 (57%) | 979 (61%) | about 23 h, but ~40 of 60 minutes quoted, ~60 days missing | **excluded** |
+| 2014 | 288 | 286,092 (85%) | 1,527 (95%) | about 23 h | included |
+| 2015 | 267 | 228,274 (68%) | 1,340 (84%) | mostly 07:00-20:00 only | **excluded** (M1) |
+| 2016 | 254 | 210,787 (63%) | 1,260 (79%) | 07:00-20:00 only | **excluded** (M1) |
+| 2017 | 255 | 190,503 (57%) | 1,222 (76%) | 07:00-20:00 only, ~52 of 60 minutes quoted | **excluded** (M1) |
+| 2018 | 297 | 277,562 (83%) | 1,488 (93%) | about 23 h | included |
+
+The declared check therefore runs on 2014 and 2018 only. That stands, and its
+verdict is the round-3 verdict. Nothing about it changes.
+
+One more run is declared here, before any backtest, **for information only. It
+cannot change the verdict:** the same frozen strategy over all six years with no
+exclusions (`mes_channel_breakout_long_h4_2013_2018_all_years`, `min_frac: 0`).
+In 2015-2017 the CFD has no overnight quotes, so its 4-hour bars cover only
+European and US hours, and its ATR and channel are measured on different bars
+from the future's. The informational run is reported with that caveat and is
+logged like any other run.
+
+## Round 3 results
+
+**Bottom line: the long-only H4 channel breakout fails its independent check.
+Four of the five declared rules fail. Nothing was retuned and nothing is
+proposed for the demo account.** Over 2014 and 2018, the only two years the
+declared coverage rule kept, it made **+0.071 R a trade after costs on 79
+trades**. It beat exposure-matched buy-and-hold, but it did not reach
++0.10 R. It did not beat random long entries, it is short of 150 trades, and
+2018 made 76% of the profit. The informational all-years run is worse:
+**−0.038 R after costs on 212 trades**, with losses in 2013, 2015 and 2016.
+Read together with round 2, the strategy's record is mostly the S&P 500's
+2019-2024 drift. It doesn't hold up on earlier data.
+
+Each check ran once, as declared. Both are in `research/experiments.jsonl` as
+`kind: frozen_check`:
+
+- `mes_channel_breakout_long_h4_2013_2018-20261006-075152-19eb60` (the check)
+- `mes_channel_breakout_long_h4_2013_2018_all_years-20261006-075207-e40f8d` (information only)
+
+**Price scale:** confirmed. The CFD mid at 16:00 New York was 1,456.44 on
+2013-01-02 against a published close of 1,462.42 (−0.41%). It was 2,057.86 on
+2015-12-31 against 2,043.94 (+0.68%), and 2,507.10 on 2018-12-31 against
+2,506.85 (+0.01%). All three are within 1%, so `price_scale` 1,000 holds for
+the older files. The CFD's own median spread was 1.7-2.6 ticks, as in later
+years. It isn't charged, because the mid is re-quoted at 1 tick.
+
+### The declared check (2014 and 2018; 2013, 2015, 2016 and 2017 excluded for coverage)
+
+| Rule | Value | Threshold | Result |
+| --- | --- | --- | --- |
+| (a) Average R after costs | +0.071 | > +0.10 | **fail** |
+| (b) Minus exposure-matched buy-and-hold | +0.050 (buy-and-hold +0.021) | > 0 | pass |
+| (c) Minus random long-entry p95 | −0.083 (p95 +0.154) | > 0 | **fail** |
+| (d) Trades | 79 | ≥ 150 | **fail** |
+| (e) Largest year's share of profit | 76% (2018) | ≤ 50% | **fail** |
+
+| Year | Trades | Avg R after costs | Win rate | Total R | Max drawdown |
+| --- | --- | --- | --- | --- | --- |
+| 2014 | 40 | +0.034 | 42.5% | +1.4 R | 4.8 R |
+| 2018 | 39 | +0.110 | 48.7% | +4.3 R | 6.1 R |
+| **Both** | **79** | **+0.071** | **45.6%** | **+5.6 R** | **6.1 R** |
+
+The figures are after costs. Costs averaged 0.026 R a trade, so before
+commission the trade made about +0.097 R, with the stressed spread and the
+slippage already in the fill prices. The profit factor was 1.14. Max drawdown
+is the largest peak-to-trough fall in R, in trade order.
+
+T0 gate table, for information (a single frozen run has no dev/validation
+split or walk-forward, so those rows are n/a):
+
+| Gate (threshold) | Value | Result |
+| --- | --- | --- |
+| Trades (≥ 300) | 79 | **fail** |
+| Avg R after costs (≥ +0.10) | +0.071 | **fail** |
+| Avg R, validation | n/a | n/a |
+| Profit factor (≥ 1.25) | 1.14 | **fail** |
+| Profit factor, validation | n/a | n/a |
+| Monte Carlo drawdown p95 (< 6%) | 5.7% | pass |
+| Daily-loss breach probability (< 2%) | 0% | pass |
+| Deflated Sharpe (> 0.95, 16 prior trials) | 0.41 | **fail** |
+| Walk-forward efficiency | n/a | n/a |
+| Avg R at 2× spread (> 0) | +0.062 | pass |
+| Largest year's share of profit (≤ 40%) | 76% | **fail** |
+| Skip-10% Monte Carlo p05 (> 0) | −0.005 | **fail** |
+| Beats random entries' p95 (> 0) | −0.083 | **fail** |
+| Worst ±20% neighbour (> 0) | +0.003 | pass |
+| Beats exposure-matched buy-and-hold (> 0) | +0.050 | pass |
+
+### Information only: all six years, no exclusions
+
+This run can't change the verdict. In 2015-2017 the CFD has no overnight
+quotes, so the 4-hour bars there aren't the future's bars, and 2013 is missing
+about 60 trading days.
+
+| Year | Trades | Avg R after costs | Win rate | Total R | Max drawdown |
+| --- | --- | --- | --- | --- | --- |
+| 2013 | 36 | −0.085 | 41.7% | −3.1 R | 11.0 R |
+| 2014 | 40 | +0.034 | 42.5% | +1.4 R | 4.8 R |
+| 2015 | 31 | −0.312 | 38.7% | −9.7 R | 11.0 R |
+| 2016 | 33 | −0.394 | 42.4% | −13.0 R | 18.0 R |
+| 2017 | 33 | +0.366 | 54.5% | +12.1 R | 3.4 R |
+| 2018 | 39 | +0.110 | 48.7% | +4.3 R | 6.1 R |
+| **All** | **212** | **−0.038** | **44.8%** | **−8.0 R** | **30.5 R** |
+
+Against the same five rules:
+
+- (a) fails at −0.038.
+- (b) fails at −0.131, against exposure-matched buy-and-hold of +0.093.
+- (c) fails at −0.033, against a random p95 of −0.005.
+- (d) passes, with 212 trades.
+- (e) fails, because the total is negative.
+
+The profit factor was 0.93. The ±20% neighbours were all negative, from
+−0.054 to −0.001.
+
+### What round 3 says
+
+- The breakout trigger adds nothing over being long the S&P 500. On the
+  declared years it beats buy-and-hold for the same hours, but not random long
+  entries with the same stops and target. That was also the case in round 2.
+- The edge isn't stable. Over all six years, two are clearly positive (2017
+  and 2018), one is flat (2014), and three lose. 2015-2016, a choppy range for
+  the S&P, cost 22.7 R. Round 2's 2022, a falling year, also lost −0.22 R a
+  trade.
+- The clean data is short. Only 2014 and 2018 have futures-like 23-hour
+  coverage on Dukascopy. A fuller pre-2019 test would need real ES or MES
+  futures history, which the repo doesn't have. But even the all-years view
+  gives no reason to expect a pass on cleaner data.
+
+## Round 3 files
+
+- `atlas_research/check.py`: `run_check`, one frozen-parameter run over a
+  declared period, read from `checks:`. It does these things:
+  - checks that the params are on the strategy's declared grid, and refuses a
+    period that reaches the holdout;
+  - reports coverage per year and applies the exclusion rule;
+  - stops the run if a price check is more than 1% off;
+  - applies the five pass rules and reports the T0 gate table for information;
+  - logs a `kind: frozen_check` entry with no new deflated-Sharpe trials.
+- `atlas_research/cli.py`: `atlas-research t0 check <name>`.
+- `atlas_research/configs/mes.yaml`: the `checks:` declarations.
+- `tests/research/test_check.py`: tests on synthetic data.
+
+Reproduce:
+
+```bash
+atlas-research --config atlas_research/configs/mes.yaml data download --symbols USA500IDXUSD --start 2013-01-01 --end 2018-12-31 --workers 2
+atlas-research --config atlas_research/configs/mes.yaml data build    --symbols USA500IDXUSD --start 2013-01-01 --end 2018-12-31
+atlas-research --config atlas_research/configs/mes.yaml t0 check mes_channel_breakout_long_h4_2013_2018
+atlas-research --config atlas_research/configs/mes.yaml t0 check mes_channel_breakout_long_h4_2013_2018_all_years
+```

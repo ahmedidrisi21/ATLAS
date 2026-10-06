@@ -167,3 +167,37 @@ strategies:
       mode: [fade, follow]
       exit_at: ["10:30", "15:55"]       # New York, same day
     # fixed: entry at 09:30 New York (M30 close), any non-zero gap, stop 4.0 x M30 ATR(14) from the 09:30 close
+
+# MES round 3 (declared 2026-10-06, before any 2013-2018 data was downloaded or
+# loaded): one frozen-parameter confirmation run of round 2's long-only channel
+# breakout on earlier years no test has used. No grid, no tuning, same costs.
+# `atlas-research --config atlas_research/configs/mes.yaml t0 check <name>`.
+checks:
+  mes_channel_breakout_long_h4_2013_2018:
+    strategy: mes_channel_breakout_long_h4
+    params: {channel: 20, sl_atr: 1.5, sides: long}   # round 2's final params (run ...-042013-7cd8a4)
+    period: ["2013-01-01", "2019-01-01"]               # end exclusive
+    coverage:                       # a year below min_frac of either reference is excluded and reported
+      reference_h4_bars_per_year: 1600      # median full year of USA500IDXUSD, 2019-2024
+      reference_m1_bars_per_year: 334700
+      min_frac: 0.70
+    price_checks:                   # published S&P 500 closes; > 1% off means a price-scale error
+      "2013-01-02": 1462.42
+      "2015-12-31": 2043.94
+      "2018-12-31": 2506.85
+    pass_rules:
+      min_expectancy_r: 0.10        # (a) average R after costs >
+      beat_buy_and_hold: true       # (b) average R - exposure-matched buy-and-hold R > 0
+      beat_random_p95: true         # (c) average R > random long-entry p95
+      min_trades: 150               # (d)
+      max_year_share: 0.50          # (e) no year > 50% of the profit
+  # Informational only, declared after the data-quality report and before any
+  # backtest: the same frozen run with no coverage exclusions. It cannot change
+  # the round-3 verdict, which is the check above.
+  mes_channel_breakout_long_h4_2013_2018_all_years:
+    strategy: mes_channel_breakout_long_h4
+    params: {channel: 20, sl_atr: 1.5, sides: long}
+    period: ["2013-01-01", "2019-01-01"]
+    coverage: {reference_h4_bars_per_year: 1600, reference_m1_bars_per_year: 334700, min_frac: 0.0}
+    price_checks: {"2013-01-02": 1462.42, "2015-12-31": 2043.94, "2018-12-31": 2506.85}
+    pass_rules: {min_expectancy_r: 0.10, beat_buy_and_hold: true, beat_random_p95: true, min_trades: 150, max_year_share: 0.50}

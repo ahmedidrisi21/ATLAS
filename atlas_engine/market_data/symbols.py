@@ -20,6 +20,10 @@ SYMBOLS: dict[str, SymbolSpec] = {
     "GBPUSD": SymbolSpec("GBPUSD", 100_000, 0.0001),
     "USDJPY": SymbolSpec("USDJPY", 1_000, 0.01),
     "XAUUSD": SymbolSpec("XAUUSD", 1_000, 0.1),
+    # Dukascopy's S&P 500 cash-index CFD, the research proxy for MES/ES futures
+    # (docs/mes-candidates.md). Prices in index points; 2019-03-05 decodes to ~2,790.
+    # "pip" here is one MES tick (0.25 index points).
+    "USA500IDXUSD": SymbolSpec("USA500IDXUSD", 1_000, 0.25),
 }
 
 

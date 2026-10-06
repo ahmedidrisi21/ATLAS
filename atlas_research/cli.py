@@ -99,8 +99,7 @@ def cmd_t0(args, cfg) -> None:
     registry_path = Path(args.registry)
     if (root / SYNTHETIC_MARKER).exists() and registry_path.resolve() == DEFAULT_REGISTRY.resolve():
         sys.exit("refusing to record synthetic-data runs in the real experiment registry; pass --registry")
-    holdout = cfg["segments"]["holdout_start"]
-    load = lambda sym, start, end: rdata.load_m1(root, sym, start, end, holdout)  # noqa: E731
+    load = lambda sym, start, end: rdata.load_research_m1(root, cfg, sym, start, end)  # noqa: E731
     names = list(cfg["strategies"]) if args.all else [args.strategy]
     for name in names:
         res = run_t0(name, cfg, load, Registry(registry_path), Path(args.out))
@@ -118,8 +117,7 @@ def cmd_t1(args, cfg) -> None:
     registry_path = Path(args.registry)
     if (root / SYNTHETIC_MARKER).exists() and registry_path.resolve() == DEFAULT_REGISTRY.resolve():
         sys.exit("refusing to record synthetic-data runs in the real experiment registry; pass --registry")
-    holdout = cfg["segments"]["holdout_start"]
-    load = lambda sym, start, end: rdata.load_m1(root, sym, start, end, holdout)  # noqa: E731
+    load = lambda sym, start, end: rdata.load_research_m1(root, cfg, sym, start, end)  # noqa: E731
     t1cfg = load_config(Path(args.t1_config))
     params = json.loads(args.params) if args.params else None
     names = list(cfg["strategies"]) if args.all else [args.strategy]
@@ -142,8 +140,7 @@ def cmd_t2(args, cfg) -> None:
     registry_path = Path(args.registry)
     if (root / SYNTHETIC_MARKER).exists() and registry_path.resolve() == DEFAULT_REGISTRY.resolve():
         sys.exit("refusing to record synthetic-data runs in the real experiment registry; pass --registry")
-    holdout = cfg["segments"]["holdout_start"]
-    load = lambda sym, start, end: rdata.load_m1(root, sym, start, end, holdout)  # noqa: E731
+    load = lambda sym, start, end: rdata.load_research_m1(root, cfg, sym, start, end)  # noqa: E731
     res = run_t2(args.strategy, cfg, load_config(Path(args.t2_config)), load, Registry(registry_path), Path(args.out))
     print(f"\n{res['experiment_id']}: best arm {res['best_arm']} {'KEPT' if res['passed'] else 'not kept'}")
     for arm, s in res["arms"].items():

@@ -193,3 +193,20 @@ def test_download_range_finishes_other_files_before_reporting_failures(tmp_path,
     with pytest.raises(RuntimeError, match="1 day-files failed"):
         dukascopy.download_range("EURUSD", dt.date(2020, 1, 1), dt.date(2020, 1, 3), tmp_path, workers=2)
     assert len(list(tmp_path.rglob("*.bi5"))) == 5
+
+
+def test_index_proxy_spec_and_fixed_spread_requote(tmp_path):
+    from atlas_research import data as rdata
+
+    assert dukascopy.spec("USA500IDXUSD").price_scale == 1_000
+    day = dt.date(2019, 3, 5)
+    idx = pd.date_range("2019-03-05 14:30", periods=3, freq="1min", tz="UTC", name="time")
+    m1 = pd.DataFrame({"bid_o": 2790.0, "bid_h": 2791.0, "bid_l": 2789.0, "bid_c": 2790.5,
+                       "ask_o": 2790.5, "ask_h": 2791.5, "ask_l": 2789.5, "ask_c": 2791.0, "volume": 1.0}, index=idx)
+    store.save_m1(tmp_path, "USA500IDXUSD", m1)
+    cfg = {"segments": {"holdout_start": "2025-07-01"}, "data": {"proxies": {"MES": {"source": "USA500IDXUSD", "spread": 0.25}}}}
+    out = rdata.load_research_m1(tmp_path, cfg, "MES", day, day + dt.timedelta(days=1))
+    assert (out["ask_c"] - out["bid_c"]).tolist() == pytest.approx([0.25] * 3)
+    assert ((out["ask_o"] + out["bid_o"]) / 2).tolist() == pytest.approx([2790.25] * 3)  # mid kept
+    with pytest.raises(rdata.HoldoutAccessError):
+        rdata.load_research_m1(tmp_path, cfg, "MES", day, "2025-08-01")

@@ -88,9 +88,10 @@ def test_signals_respect_stop_bounds_and_filters(feats, name):
     dist = sig["direction"].to_numpy() * (close - sig["stop"].to_numpy())
     p = SETUPS[name].defaults
     assert (dist > 0).all()
-    lo, hi = (p["sl_min_atr"], p["sl_max_atr"]) if "sl_min_atr" in p else (p["sl_atr"], p["sl_atr"])
-    assert (dist <= hi * sig["atr"].to_numpy() + 1e-9).all()
-    assert (dist >= lo * sig["atr"].to_numpy() - 1e-9).all()
+    if "sl_min_atr" in p or "sl_atr" in p:  # the opening-range breakout sizes its stop from the range instead
+        lo, hi = (p["sl_min_atr"], p["sl_max_atr"]) if "sl_min_atr" in p else (p["sl_atr"], p["sl_atr"])
+        assert (dist <= hi * sig["atr"].to_numpy() + 1e-9).all()
+        assert (dist >= lo * sig["atr"].to_numpy() - 1e-9).all()
     assert (sig["spread"].to_numpy() <= 0.2 * dist + 1e-12).all()
     assert not sessions.rollover_blackout(pd.DatetimeIndex(sig["decision_time"])).any()
 
@@ -120,7 +121,8 @@ def test_decision_bar_must_divide_an_hour(m1):
         build_features(m1.iloc[:5000], FeatureConfig(bar="45min"))
 
 
-@pytest.mark.parametrize("name", sorted(SETUPS))
+# A 09:30 New York opening range needs sub-hourly bars, so it has no H1 signals.
+@pytest.mark.parametrize("name", sorted(set(SETUPS) - {"opening_range_breakout"}))
 def test_setups_have_no_lookahead_on_h1_bars(m1, name):
     cut = pd.Timestamp("2019-03-20", tz="UTC")
     cfg = FeatureConfig(bar="1h")

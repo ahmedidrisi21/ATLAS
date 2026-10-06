@@ -144,10 +144,16 @@ def cmd_check(args, cfg) -> None:
     print(f"\n{res['experiment_id']}: {'PASS' if res['passed'] else 'FAIL'} (frozen {res['final_params']})")
     for sym, rows in res["coverage"].items():
         for c in rows:
-            print(f"  {sym} {c['year']}: {c['m1_bars']:>7,} M1 ({c['m1_frac']:.0%})  {c['h4_bars']:>5,} H4 ({c['h4_frac']:.0%})"
+            h4 = f"  {c['h4_bars']:>5,} H4 ({c['h4_frac']:.0%})" if c.get("h4_frac") is not None else ""
+            rth = f"  RTH quoted {c['rth_frac']:.1%}" if c.get("rth_frac") is not None else ""
+            print(f"  {sym} {c['year']}: {c['m1_bars']:>7,} M1 ({c['m1_frac']:.0%}){h4}{rth}"
                   f"  {'included' if c['included'] else 'EXCLUDED'}")
     for y in res["years"]:
         print(f"  {y['year']}: {y['trades']:>4} trades  {y['expectancy_r']:+.3f} R  win {y['win_rate']:.1%}  max DD {y['max_dd_r']:.1f} R")
+    pts = res["points"]
+    print(f"  net {pts['net_points_per_trade']:+.1f} pt/trade, median 1R {pts['median_risk_points']:.1f} pt;"
+          f" all-in Stress {res['all_in']['expectancy_r']:+.3f} R" if res.get("all_in") else
+          f"  net {pts['net_points_per_trade']:+.1f} pt/trade, median 1R {pts['median_risk_points']:.1f} pt")
     for g in res["pass_rules"]:
         print(f"  {'pass' if g['passed'] else 'FAIL'}  {g['gate']}: {g['value']:+.3f} ({g['rule']})")
     print(json.dumps(res["kanban_metadata"], indent=2, default=str))

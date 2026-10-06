@@ -268,6 +268,102 @@ def gate(name: str, value: float, op: str, threshold: float, scope: str, source:
     return {"gate": name, "value": value, "rule": f"{op} {threshold:g}", "passed": bool(passed), "scope": scope, "source": source}
 
 
+def points_summary(trades: pd.DataFrame) -> dict:
+    """Net index points (price units) per trade after costs, and the median 1R in points."""
+    if trades.empty:
+        return {"net_points_per_trade": 0.0, "total_points": 0.0, "median_risk_points": 0.0}
+    pts = trades["r"].to_numpy(float) * trades["risk"].to_numpy(float)
+    return {"net_points_per_trade": float(pts.mean()), "total_points": float(pts.sum()),
+            "median_risk_points": float(np.median(trades["risk"].to_numpy(float)))}
+
+
+def fixed_point_report(runner: "Runner", params: dict, dev_span: Window, val: Window, cfg: dict, has_all_in: bool,
+                       n_trials: int, var_trials: float, seed: int) -> dict:
+    """One grid point held fixed over the out-of-sample span (dev test span + validation), for information.
+
+    Not a verdict: nothing is selected, so walk-forward efficiency doesn't
+    apply. Returns the same figures and the gates a fixed point can be judged on.
+    """
+    g, acct = cfg["gates"], cfg["account"]
+    span = (dev_span[0], val[1])
+    t = in_window(runner.trades(params, cfg["costs"]["spread_mult"]), span)
+    td, tv = in_window(t, dev_span), in_window(t, val)
+    stress = in_window(runner.trades(params, cfg["costs"]["stress_spread_mult"]), span)
+    all_in = in_window(runner.trades(params, cfg["costs"]["spread_mult"], all_in=True), span) if has_all_in else None
+    r = t["r"].to_numpy(float)
+    exp_r = float(r.mean()) if len(r) else 0.0
+    years = metrics.breakdown(t, "year")
+    max_year_share = float(years["share_of_profit"].max()) if len(years) and r.sum() > 0 else 1.0
+    risk_pct = acct["risk_pct"]
+    mc = metrics.mc_drawdown(r, risk_pct, g["mc_sims"], seed)
+    mc_skip = metrics.mc_drawdown(r, risk_pct, g["mc_sims"], seed + 1, skip_frac=0.10)
+    breach = metrics.daily_breach_probability(t, risk_pct, acct["firm_daily_loss_pct"], acct["eval_days"], g["mc_sims"], seed)
+    dsr = metrics.deflated_sharpe(r, n_trials, var_trials)
+    rand = random_control(runner, t, [dev_span, val], g["random_control_runs"], seed)
+    rand_p95 = float(np.percentile(rand, 95)) if len(rand) else 0.0
+    rand_dir = random_direction(runner, t, int(g.get("random_direction_runs") or 0), seed) if g.get("random_direction_runs") else np.array([])
+    rd_p95 = float(np.percentile(rand_dir, 95)) if len(rand_dir) else None
+    nbr = [in_window(runner.trades(p, cfg["costs"]["spread_mult"]), span)["r"].mean() for p in neighbours(params, g["neighborhood"])]
+    nbr = [0.0 if np.isnan(x) else float(x) for x in nbr]
+    ds, vs = metrics.summary(td), metrics.summary(tv)
+    scope = "fixed point, OOS span"
+    gates = [
+        gate("OOS trades", len(t), ">=", g["min_oos_trades"], scope),
+        gate("Expectancy after costs (R)", ds["expectancy_r"], ">=", g["min_expectancy_r"], "fixed point, dev test span"),
+        gate("Expectancy after costs (R)", vs["expectancy_r"], ">=", g["min_expectancy_r"], "fixed point, validation"),
+        gate("Profit factor", ds["profit_factor"], ">=", g["min_profit_factor"], "fixed point, dev test span"),
+        gate("Profit factor", vs["profit_factor"], ">=", g["min_profit_factor"], "fixed point, validation"),
+        gate("Max DD, Monte Carlo p95 (% equity)", mc["dd_p95_pct"], "<", g["max_dd_frac_of_firm"] * acct["firm_max_drawdown_pct"], scope),
+        gate("Daily-loss breach probability", breach, "<", g["max_daily_breach_prob"], scope),
+        gate("Deflated Sharpe ratio", dsr, ">", g["min_dsr"], f"{scope}, {n_trials} trials"),
+        gate("Expectancy at 2x spread (R)", float(stress["r"].mean()) if len(stress) else 0.0, ">", 0.0, scope),
+        gate("Largest single-year share of profit", max_year_share, "<=", g["max_year_share"], scope, "PRD §22"),
+        gate("Skip-10% Monte Carlo expectancy p05 (R)", mc_skip["expectancy_p05"], ">", 0.0, scope),
+        gate("Expectancy minus random-entry p95 (R)", exp_r - rand_p95 if len(r) else 0.0, ">", 0.0, scope),
+        gate("Worst ±20% neighbour expectancy (R)", min(nbr) if nbr else 0.0, ">", 0.0, scope),
+    ]
+    if all_in is not None:
+        gates.append(gate("Expectancy at all-in Stress round trip (R)", float(all_in["r"].mean()) if len(all_in) else 0.0, ">", 0.0, scope))
+    if g.get("same_sign_every_year"):
+        gates.append(gate("Worst OOS year's average R after costs", float(years["expectancy_r"].min()) if len(years) else 0.0, ">", 0.0, scope))
+    if rd_p95 is not None:
+        gates.append(gate("Expectancy minus random-direction p95 (R)", exp_r - rd_p95 if len(r) else 0.0, ">", 0.0, scope))
+    by_year = {int(y): {"trades": int(row["trades"]), "expectancy_r": float(row["expectancy_r"])} for y, row in years.iterrows()}
+    if all_in is not None and len(all_in):
+        for y, row in metrics.breakdown(all_in, "year").iterrows():
+            by_year.setdefault(int(y), {})["all_in_expectancy_r"] = float(row["expectancy_r"])
+    return {
+        "params": params,
+        "span": [str(span[0].date()), str(span[1].date())],
+        "trades": len(t),
+        "expectancy_r": exp_r,
+        "gross_expectancy_r": float(t["r_gross"].mean()) if len(t) else 0.0,
+        "all_in_expectancy_r": float(all_in["r"].mean()) if all_in is not None and len(all_in) else None,
+        "stress_2x_spread_expectancy_r": float(stress["r"].mean()) if len(stress) else 0.0,
+        "profit_factor": metrics.profit_factor(r),
+        "win_rate": float((r > 0).mean()) if len(r) else 0.0,
+        "dev_span": ds,
+        "validation": vs,
+        **points_summary(t),
+        "by_year": by_year,
+        "exit_reasons": t["exit_reason"].value_counts().to_dict() if len(t) else {},
+        "random_entry": {"runs": len(rand), "mean": float(rand.mean()) if len(rand) else None, "p95": rand_p95},
+        "random_direction": {"runs": len(rand_dir), "mean": float(rand_dir.mean()) if len(rand_dir) else None, "p95": rd_p95},
+        "neighbours": nbr,
+        "dsr": dsr,
+        "monte_carlo_dd_p95_pct": mc["dd_p95_pct"],
+        "gates": gates,
+        "failed_gates": [x["gate"] + " / " + x["scope"] for x in gates if not x["passed"]],
+    }
+
+
+def _registry_extra(extra: dict) -> dict:
+    """The registry line keeps each fixed point's figures and failed gates, not its full gate table."""
+    if "fixed_points" not in extra:
+        return extra
+    return {**extra, "fixed_points": [{k: v for k, v in fp.items() if k != "gates"} for fp in extra["fixed_points"]]}
+
+
 def run_t0(
     strategy: str,
     cfg: dict,
@@ -426,7 +522,15 @@ def run_t0(
         "by_year": by_year,
         "exit_reasons": oos["exit_reason"].value_counts().to_dict() if len(oos) else {},
         "long_short": {int(k): {"trades": int(v.size), "expectancy_r": float(v.mean())} for k, v in oos.groupby("direction")["r"]} if len(oos) else {},
+        **points_summary(oos),
     }
+    # Information (declared per strategy): every grid point held fixed over the OOS span. Never part of the verdict.
+    if scfg.get("report_grid_points"):
+        folds = walk_forward_folds(dev, wf["train_months"], wf["test_months"])
+        if folds:
+            dev_span = (folds[0][1][0], folds[-1][1][1])
+            extra["fixed_points"] = [fixed_point_report(runner, p_, dev_span, val, cfg, has_all_in, n_trials, var_trials, seed)
+                                     for p_ in grid]
 
     exp_id = f"{strategy}-{now:%Y%m%d-%H%M%S}-" + hashlib.sha1(json.dumps([scfg, cfg["segments"]], sort_keys=True, default=str).encode()).hexdigest()[:6]
     result = {
@@ -470,7 +574,7 @@ def run_t0(
     }
     registry.append({k: result[k] for k in (
         "experiment_id", "strategy", "setup", "bar", "exits", "strategy_version", "created_at", "hypothesis", "symbols", "data_window",
-        "grid", "trial_sharpes", "final_params", "passed", "kanban_metadata")} | ({"extra": extra} if has_all_in or g.get("random_direction_runs") else {}) | {"failed_gates": [x["gate"] + " / " + x["scope"] for x in gates if not x["passed"]]})
+        "grid", "trial_sharpes", "final_params", "passed", "kanban_metadata")} | ({"extra": _registry_extra(extra)} if has_all_in or g.get("random_direction_runs") else {}) | {"failed_gates": [x["gate"] + " / " + x["scope"] for x in gates if not x["passed"]]})
 
     if out_dir is not None:
         from .report import write_report

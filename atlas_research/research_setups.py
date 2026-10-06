@@ -79,7 +79,8 @@ def late_day_momentum(f: pd.DataFrame, p: dict) -> pd.DataFrame:
 
 # --- review #3: noise-area intraday momentum ---------------------------------
 
-NOISE_DEFAULTS = {"lookback": 14, "trail": "band", "first_check": "10:00", "last_check": "15:30", "exit_at": "16:00"}
+NOISE_DEFAULTS = {"lookback": 14, "trail": "band", "first_check": "10:00", "last_check": "15:30", "exit_at": "16:00",
+                  "stop_k": None}
 
 
 def noise_area(f: pd.DataFrame, p: dict) -> pd.DataFrame:
@@ -93,7 +94,11 @@ def noise_area(f: pd.DataFrame, p: dict) -> pd.DataFrame:
     band and the session TWAP), a short likewise above the lower band (or the
     lower of it and the TWAP); then, if flat, a close above the upper band goes
     long and below the lower band goes short. Every open position is flat at
-    ``exit_at``. The protective stop is the opposite band at entry.
+    ``exit_at``. The protective stop is the opposite band at entry (round 1,
+    ``stop_k: None``), or, in MNQ round 2, ``stop_k`` x the band's half-width
+    at the entry checkpoint (sigma x the band's base price) from the entry
+    close. The stop never feeds back into the checkpoint state machine, so the
+    entries are the same whatever the stop.
     """
     if p["trail"] not in ("band", "band_twap"):
         raise ValueError(f"trail must be 'band' or 'band_twap', not {p['trail']!r}")
@@ -125,6 +130,10 @@ def noise_area(f: pd.DataFrame, p: dict) -> pd.DataFrame:
     twap_tab = tw.loc[ck].groupby([date[ck], close_min[ck]]).last().unstack().reindex(index=opens.index, columns=checks)
     row_tab = pd.Series(f.index[ck], index=pd.MultiIndex.from_arrays([date[ck], close_min[ck]])).groupby(level=[0, 1]).last()
 
+    stop_k = p.get("stop_k")
+    if stop_k is not None and not float(stop_k) > 0:
+        raise ValueError(f"stop_k must be None or > 0, not {stop_k!r}")
+    base_hi, base_lo = np.maximum(opens, pc), np.minimum(opens, pc)
     use_twap = p["trail"] == "band_twap"
     exit_at = sessions._hhmm(p["exit_at"])
     ok_day = dict(zip(opens.index, trading_day(opens.index)))
@@ -146,7 +155,12 @@ def noise_area(f: pd.DataFrame, p: dict) -> pd.DataFrame:
             if pos == 0 and (x > ub or x < lb):
                 pos = 1 if x > ub else -1
                 r = f.loc[row_tab[(day, c)]]
-                open_trade = {"decision_time": r["close_time"], "direction": pos, "stop": lb if pos == 1 else ub,
+                if stop_k is None:
+                    stop = lb if pos == 1 else ub
+                else:
+                    half = (ub - base_hi[day]) if pos == 1 else (base_lo[day] - lb)
+                    stop = x - pos * float(stop_k) * half
+                open_trade = {"decision_time": r["close_time"], "direction": pos, "stop": stop,
                               "atr": r["atr"], "spread": r["spread"], "exit_by": _ny(day, exit_at)}
                 rows.append(open_trade)
     if not rows:
@@ -265,7 +279,7 @@ def rsi2_pullback(f: pd.DataFrame, p: dict) -> pd.DataFrame:
 
 
 LATE_DAY_MOMENTUM = Setup("late_day_momentum", "0.1.0", late_day_momentum, LATE_DAY_DEFAULTS, session_based=True)
-NOISE_AREA = Setup("noise_area", "0.1.0", noise_area, NOISE_DEFAULTS, session_based=True)
+NOISE_AREA = Setup("noise_area", "0.2.0", noise_area, NOISE_DEFAULTS, session_based=True)
 OPENING_CANDLE = Setup("opening_candle", "0.1.0", opening_candle, CANDLE_DEFAULTS, session_based=True)
 RSI2_PULLBACK = Setup("rsi2_pullback", "0.1.0", rsi2_pullback, RSI2_DEFAULTS, session_based=True)
 

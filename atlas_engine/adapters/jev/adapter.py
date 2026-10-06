@@ -38,7 +38,14 @@ from typing import Callable, Protocol
 
 from atlas_engine.decisions.state import CATEGORICAL, NUMERIC, REGIMES
 
-from .questions import QUESTIONS, QUESTIONS_VERSION  # every model-facing word lives there
+from .questions import (  # every model-facing word lives there
+    NOISE_CATEGORICAL,
+    NOISE_QUESTIONS,
+    NOISE_QUESTIONS_VERSION,
+    NOISE_STATE_FIELDS,
+    QUESTIONS,
+    QUESTIONS_VERSION,
+)
 
 REQUEST_KEYS = frozenset((*NUMERIC, *CATEGORICAL, "setup", "target_r", "cost_r", "recent_signal_r20"))
 _DATE_LIKE = re.compile(r"\d{4}-\d{2}-\d{2}|\d{2}:\d{2}|\d{10,}")
@@ -72,16 +79,36 @@ class Skip:
     latency_ms: float | None = None
 
 
-def check_state(state: dict) -> dict:
+@dataclass(frozen=True)
+class QuestionSet:
+    """One versioned set of questions, the state keys it may see, and the Noul whose "yes" the adapter returns.
+
+    The returned probability keeps the name ``p_target_first`` in ``JevResult``; for a set whose Noul asks
+    something else (``NOISE``: "closes in profit") it is that Noul's probability.
+    """
+
+    version: str
+    questions: dict
+    keys: frozenset
+    categorical: dict
+    yes_id: str
+
+
+Q2 = QuestionSet(QUESTIONS_VERSION, QUESTIONS, REQUEST_KEYS, CATEGORICAL, "p_target_first")
+# Research only (MNQ noise-area Jev filter test); never wired into the live engine.
+NOISE = QuestionSet(NOISE_QUESTIONS_VERSION, NOISE_QUESTIONS, frozenset(NOISE_STATE_FIELDS), NOISE_CATEGORICAL, "p_profit")
+
+
+def check_state(state: dict, keys: frozenset = REQUEST_KEYS, categorical: dict = CATEGORICAL) -> dict:
     """Validate and normalise the model-facing state, raising ``LeakageError`` on anything outside §17."""
-    extra = set(state) - REQUEST_KEYS
+    extra = set(state) - keys
     if extra:
         raise LeakageError(f"fields not allowed in a Jev request: {sorted(extra)}")
     out = {}
-    for k in sorted(REQUEST_KEYS):
+    for k in sorted(keys):
         v = state.get(k)
-        if k in CATEGORICAL:
-            if v not in CATEGORICAL[k]:
+        if k in categorical:
+            if v not in categorical[k]:
                 raise LeakageError(f"{k}={v!r} is not one of the fixed labels")
         elif k == "setup":
             if not isinstance(v, str) or not re.fullmatch(r"[a-z][a-z0-9_]{0,40}", v) or _SYMBOL_LIKE.search(v.replace("_", " ")):
@@ -117,7 +144,8 @@ class ReplayTransport:
                     self.responses[rec["request_hash"]] = rec["response"]
 
     def __call__(self, request: dict) -> dict:
-        return self.responses[request_hash(_cache_key(request))]
+        # The hash leaves out setup_id, so the same state asked for two candidates replays under the asker's id.
+        return {**self.responses[request_hash(_cache_key(request))], "setup_id": request["setup_id"]}
 
 
 def _cache_key(request: dict) -> dict:
@@ -132,22 +160,25 @@ class JevAdapter:
     timeout_ms: float = 500.0
     cache: dict = field(default_factory=dict)
     latencies_ms: list = field(default_factory=list)
+    question_set: QuestionSet = Q2
 
     def __post_init__(self):
         if self.live and (not self.model_version or self.model_version.endswith("latest")):
             raise ValueError("live mode needs a pinned Jev model version, never jev-latest (PRD §17)")
         self._pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="jev")
 
-    def build_request(self, setup_id: str, state: dict, target_r: float, cost_r: float) -> dict:
+    def build_request(self, setup_id: str, state: dict, target_r: float | None, cost_r: float) -> dict:
+        qs = self.question_set
+        planned = {k: v for k, v in (("target_r", target_r), ("cost_r", cost_r)) if k in qs.keys}
         return {
             "setup_id": setup_id,
             "model_version": self.model_version,
-            "questions_version": QUESTIONS_VERSION,
-            "questions": QUESTIONS,
-            "state": check_state({**state, "target_r": target_r, "cost_r": cost_r}),
+            "questions_version": qs.version,
+            "questions": qs.questions,
+            "state": check_state({**state, **planned}, qs.keys, qs.categorical),
         }
 
-    def evaluate_setup(self, setup_id: str, state: dict, target_r: float, cost_r: float) -> JevResult | Skip:
+    def evaluate_setup(self, setup_id: str, state: dict, target_r: float | None, cost_r: float) -> JevResult | Skip:
         request = self.build_request(setup_id, state, target_r, cost_r)
         key = request_hash(_cache_key(request))
         if key in self.cache:

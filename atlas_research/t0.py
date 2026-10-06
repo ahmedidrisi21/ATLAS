@@ -93,12 +93,13 @@ class Runner:
             self._cache[key] = _concat(parts)
         return self._cache[key]
 
-    def simulate_signals(self, signals_by_symbol: dict[str, pd.DataFrame], spread_mult: float) -> pd.DataFrame:
+    def simulate_signals(self, signals_by_symbol: dict[str, pd.DataFrame], spread_mult: float, all_in: bool = False) -> pd.DataFrame:
         parts = []
         for m in self.markets:
             sig = signals_by_symbol.get(m.symbol)
             if sig is not None and len(sig):
-                parts.append(simulate(sig, m.m1, m.costs.with_spread(spread_mult), self.exits, m.symbol, self._path(m, spread_mult), self._trail(m)))
+                costs, mult = (m.all_in, 0.0) if all_in else (m.costs.with_spread(spread_mult), spread_mult)
+                parts.append(simulate(sig, m.m1, costs, self.exits, m.symbol, self._path(m, mult), self._trail(m)))
         return _concat(parts)
 
     def _trail(self, m: Market) -> TrailFrame | None:

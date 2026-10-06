@@ -141,7 +141,7 @@ def noise_area(f: pd.DataFrame, p: dict) -> pd.DataFrame:
     for day in opens.index:
         if not ok_day[day]:
             continue
-        pos, open_trade = 0, None
+        pos, open_trade, entries = 0, None, 0
         for c in checks:
             x, ub, lb = close_tab.at[day, c], upper.at[day, c], lower.at[day, c]
             if not (np.isfinite(x) and np.isfinite(ub) and np.isfinite(lb)):
@@ -160,8 +160,13 @@ def noise_area(f: pd.DataFrame, p: dict) -> pd.DataFrame:
                 else:
                     half = (ub - base_hi[day]) if pos == 1 else (base_lo[day] - lb)
                     stop = x - pos * float(stop_k) * half
+                entries += 1
+                base = base_hi[day] if pos == 1 else base_lo[day]
                 open_trade = {"decision_time": r["close_time"], "direction": pos, "stop": stop,
-                              "atr": r["atr"], "spread": r["spread"], "exit_by": _ny(day, exit_at)}
+                              "atr": r["atr"], "spread": r["spread"], "exit_by": _ny(day, exit_at),
+                              # information for the Jev noise-area state only; the backtest never reads these
+                              "nz_sigma": sigma.at[day, c], "nz_base": base, "nz_close": x, "nz_open": opens[day],
+                              "nz_prior_close": pc[day], "nz_checkpoint": checks.index(c) + 1, "nz_entry_of_day": entries}
                 rows.append(open_trade)
     if not rows:
         return _empty()

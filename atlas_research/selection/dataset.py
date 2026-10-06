@@ -96,6 +96,8 @@ def build_candidates(setup: Setup, markets: list[Market], params: dict, exits: E
 def signals_of(candidates: pd.DataFrame) -> dict[str, pd.DataFrame]:
     """Back to per-symbol signal frames for the backtester."""
     cols = ["decision_time", "direction", "stop", "atr", "spread", "setup"]
+    if "exit_by" in candidates:  # timed / trailing research setups carry their own exit clock
+        cols.append("exit_by")
     return {sym: g[cols].reset_index(drop=True) for sym, g in candidates.groupby("symbol")}
 
 

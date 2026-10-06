@@ -51,7 +51,7 @@ def test_bad_values_are_refused(key, value):
 
 def test_request_carries_pinned_wording_and_no_account_data():
     req = adapter(answer).build_request("S", STATE, 2.0, 0.08)
-    assert req["questions_version"] and "target" in req["questions"]["p_target_first"]
+    assert req["questions_version"] and "target" in req["questions"]["p_target_first"]["instructions"]["question"]
     assert set(req) == {"setup_id", "model_version", "questions_version", "questions", "state"}
     assert "balance" not in str(req) and "equity" not in str(req)
 

@@ -198,3 +198,19 @@ def test_uncalibrated_jev_trades_a_demo_account_only(tmp_path, calibration, demo
         assert out["reasons"] == ["uncalibrated_model_needs_demo_account"]
     else:
         assert out["pipeline"]["model"]["model"] == "jev"
+
+
+def test_every_question_and_threshold_lives_in_one_file_and_every_state_field_is_explained():
+    """TypeSafe's agent skill: keep questions and thresholds in one reviewable file; ids never reach the model."""
+    from pathlib import Path
+
+    from atlas_engine.adapters.jev import adapter as jev_adapter
+    from atlas_engine.adapters.jev.questions import QUESTIONS, STATE_FIELDS
+
+    pkg = Path(jev_adapter.__file__).parent
+    others = [p.name for p in pkg.glob("*.py") if p.name != "questions.py"
+              and any(w in p.read_text() for w in ('"instructions"', '"criteria"', "REGIME_UNCERTAIN ="))]
+    assert others == []
+    assert set(jev_adapter.REQUEST_KEYS) <= set(STATE_FIELDS)
+    for q in QUESTIONS.values():
+        assert q["instructions"]["question"].endswith("?") and q["instructions"]["fields"] is STATE_FIELDS

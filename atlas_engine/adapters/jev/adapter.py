@@ -38,13 +38,7 @@ from typing import Callable, Protocol
 
 from atlas_engine.decisions.state import CATEGORICAL, NUMERIC, REGIMES
 
-QUESTIONS_VERSION = "atlas-jev-q1"
-QUESTIONS = {
-    "p_target_first": (
-        "Given this setup state, will price reach the planned target before the planned stop? Answer yes or no."
-    ),
-    "regime": "Which regime best describes the market in this state? Choose one of: " + ", ".join(REGIMES) + ".",
-}
+from .questions import QUESTIONS, QUESTIONS_VERSION  # every model-facing word lives there
 
 REQUEST_KEYS = frozenset((*NUMERIC, *CATEGORICAL, "setup", "target_r", "cost_r", "recent_signal_r20"))
 _DATE_LIKE = re.compile(r"\d{4}-\d{2}-\d{2}|\d{2}:\d{2}|\d{10,}")

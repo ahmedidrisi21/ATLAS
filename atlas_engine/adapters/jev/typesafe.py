@@ -5,7 +5,8 @@ adapter has already run the leakage guard, so the state this sends holds only
 normalised numbers in ATR/R units, fixed labels and the setup name: no dates,
 prices, symbols, news text, balances or credentials.
 
-One request asks two questions about that state (docs.typesafe.ai/api):
+One request asks two questions about that state (docs.typesafe.ai/api); their wording and the
+threshold below live in ``questions.py``:
 
 - ``p_target_first``, a Noul. Its value, the probability of "yes", is the
   model's p_target_first.
@@ -32,44 +33,11 @@ import urllib.request
 from dataclasses import dataclass, field
 from typing import Callable
 
-from atlas_engine.decisions.state import REGIMES
+from .questions import REGIME_UNCERTAIN
 
 ENDPOINT = "https://api.typesafe.ai/v1/systemone"
 API_KEY_ENV = "TYPESAFE_API_KEY"
 DEFAULT_MODEL = "jev-1.13.0"  # pinned; jev-latest is refused live by the adapter
-REGIME_UNCERTAIN = 0.5  # Choice confidence below this adds "regime_uncertain"
-
-_TREND = {"trend": "a directional, trending market", "range": "a sideways, ranging market"}
-_VOL = {"low": "low volatility", "normal": "normal volatility", "high": "high volatility"}
-
-
-def _regime_text(label: str) -> str:
-    trend, vol, _ = label.split("_")
-    return f"{_TREND[trend]} with {_VOL[vol]}"
-
-
-def typesafe_questions(questions: dict) -> dict:
-    """The adapter's pinned question text as typed System One questions."""
-    return {
-        "p_target_first": {
-            "type": "noul",
-            "instructions": {
-                "question": questions["p_target_first"],
-                "units": "Distances are in ATR multiples; `target_r` and `cost_r` are in R, where 1R is the "
-                         "distance from entry to stop.",
-            },
-            "criteria": {
-                "true": "Price reaches the target before the stop",
-                "false": "Price reaches the stop before the target",
-            },
-        },
-        "regime": {
-            "type": "choice",
-            "instructions": questions["regime"],
-            "criteria": {r: _regime_text(r) for r in REGIMES},
-        },
-    }
-
 
 class TypeSafeError(RuntimeError):
     """The API answered with an error status or a body that isn't the documented shape."""
@@ -106,7 +74,7 @@ class TypeSafeTransport:
 
     def body(self, request: dict) -> dict:
         return {"state": request["state"], "model": request["model_version"],
-                "questions": typesafe_questions(request["questions"])}
+                "questions": request["questions"]}  # already typed System One questions (questions.py)
 
     def __call__(self, request: dict) -> dict:
         payload = json.dumps(self.body(request)).encode()

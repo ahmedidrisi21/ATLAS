@@ -520,3 +520,230 @@ are not the verdict and cannot change it.
   loaded from 2019-01-01, so it never saw 2018. Every T0 window starts in 2019
   or later. After this declaration is committed, the round-1 trade files are
   checked for any 2018 entry, and the result is reported below.
+
+**After the declaration commit (`1a86b30`):** the round-1 trade files were
+checked. No round-1 trade, in any strategy, entered before 2020-01-02. The
+noise-area run's first OOS trade is 2020-01-02, RSI(2)'s is 2024-01-02, and
+the trend filter's first signal is 2019-01-14. 2018 was never traded.
+
+## Round 2 results
+
+**Bottom line: round 2 fails. It fails 5 of its 17 gates, so nothing is
+proposed for the demo account and no strategy file was written.** The
+walk-forward picked the tightest stop, k = 0.5. It was strong on dev (+0.198 R,
+PF 1.43) and close to zero on validation (+0.009 R, PF 1.02), and 2024 lost.
+The frozen k = 0.5 then **passed all six declared 2018 rules**, by a wide
+margin. That is a real, independent point in its favour, but it doesn't undo
+the validation failure. Each run was made once, with no reruns. All three are
+in `research/experiments.jsonl`:
+
+- `mnq_noise_area_r2_m5-20261006-113937-69c5b8`, the round-2 T0 run (the verdict)
+- `mnq_noise_area_r2_2018-20261006-114355-ef9f2d`, the 2018 check (`kind: frozen_check`)
+- `mnq_noise_area_r1_2018_info-20261006-114406-b74a66`, round 1's band stop
+  on 2018, information only. Its registry line says `passed: true`
+  against the same rules, but it can't change any verdict.
+
+The chosen k was written into `checks:` in commit `4caf21f`, after the
+round-2 run and before the 2018 runs.
+
+### The verdict run (walk-forward picks, out-of-sample 2020 to Jun 2025)
+
+| | Round 2 (k picked per fold; final k = 0.5) | Round 1 (band stop), for comparison |
+| --- | --- | --- |
+| OOS trades | 1,164 | 1,171 |
+| Avg R gross | +0.169 | +0.027 |
+| **Avg R after base costs** | **+0.150** | +0.023 |
+| Avg R at 2.0 pt Stress | +0.140 | +0.021 |
+| Avg R at 2× spread | +0.142 | +0.023 |
+| Profit factor | 1.30 | 1.21 / 1.21 |
+| Dev OOS: avg R, PF (869 trades) | +0.198, 1.43 | +0.023, 1.21 |
+| Validation: avg R, PF (295 trades) | **+0.009, 1.02** | +0.024, 1.21 |
+| Median 1R | 44 pt | 241 pt |
+| **Net points per trade** | **+7.3** (+$14.55 per MNQ) | +7.7 |
+| Total OOS points | +8,470 | +8,981 |
+| Exits | 462 stops (1 gap), 702 trail/close | 4 stops |
+| Long / short avg R | +0.237 (604) / +0.056 (560) | +0.040 / +0.004 |
+| Random entry p95 | −0.009 | +0.005 |
+| Random direction mean / p95 | +0.019 / +0.075 | p95 +0.003 |
+| Exposure-matched buy-and-hold R | +0.002 | +0.000 |
+| Deflated Sharpe (6 trials pooled) | 0.99 | 0.98 (2) |
+
+The 7 fewer trades than round 1 are not a change in entries. In Q1 2020
+round 1's walk-forward picked its band + TWAP trail. Every round-2 grid
+point has exactly round 1's band-trail entries: 1,056 on dev and 295 on
+validation.
+
+Walk-forward picks by test quarter: k = 2.0 for Q1 2020, k = 1.0 from Q2 2020
+to Q3 2021, then k = 0.5 from Q4 2021 on. The whole-dev pick (validation's
+point and the 2018 check's point) is k = 0.5.
+
+| Year (OOS) | 2020 | 2021 | 2022 | 2023 | 2024 | 2025 H1 |
+| --- | --- | --- | --- | --- | --- | --- |
+| Trades | 204 | 211 | 248 | 206 | 198 | 97 |
+| Avg R after costs | +0.089 | +0.146 | +0.266 | +0.276 | **−0.073** | +0.176 |
+| Avg R, Stress 2.0 pt | +0.083 | +0.138 | +0.257 | +0.263 | **−0.089** | +0.168 |
+
+| Gate (threshold) | Value | |
+| --- | --- | --- |
+| OOS trades (≥ 300) | 1,164 | pass |
+| Avg R after costs, dev (≥ +0.10) | +0.198 | pass |
+| Avg R after costs, validation (≥ +0.10) | +0.009 | **fail** |
+| Profit factor, dev (≥ 1.25) | 1.43 | pass |
+| Profit factor, validation (≥ 1.25) | 1.02 | **fail** |
+| Monte Carlo drawdown p95 (< 6%) | 18.5% | **fail** |
+| Daily-loss breach (< 2%) | 0% | pass |
+| Deflated Sharpe (> 0.95), 6 trials | 0.99 | pass |
+| Walk-forward efficiency (≥ 50%) | 110% | pass |
+| Avg R at 2× spread (> 0) | +0.142 | pass |
+| Largest year's share of profit (≤ 40%) | 37.8% | pass |
+| Skip-10% Monte Carlo p05 (> 0) | +0.119 | pass |
+| Beats random entries' p95 | +0.159 | pass |
+| Worst ±20% neighbour, validation (> 0) | −0.025 (k = 0.4) | **fail** |
+| *Review:* Stress 2.0 pt (> 0) | +0.140 | pass |
+| *Review:* every OOS year > 0 | −0.073 (2024) | **fail** |
+| *Review:* beats random direction p95 | +0.075 | pass |
+
+### Every grid point held fixed (information only, declared; not the verdict)
+
+Each point traded over the whole OOS span (2020-01 to 2025-06) with no
+selection. Same 1,164 entries for all four.
+
+| k | Avg R base | Avg R 2.0 pt | Net pt / trade | Median 1R (pt) | PF | Dev span R / PF | Validation R / PF | Stops hit | Random entry p95 | Random dir. p95 | Gates failed |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 0.5 | +0.148 | +0.135 | +6.4 | 35 | 1.26 | +0.195 / 1.35 | **+0.009 / 1.02** | 561 | −0.010 | +0.070 | 4: val R, val PF, MC DD 21.7%, 2024 < 0 |
+| 1.0 | +0.114 | +0.108 | +8.4 | 69 | 1.31 | +0.117 / 1.33 | +0.106 / 1.27 | 277 | +0.018 | +0.050 | 1: MC DD 12.8% |
+| 1.5 | +0.072 | +0.068 | +7.9 | 103 | 1.27 | +0.070 / 1.27 | +0.077 / 1.28 | 137 | +0.009 | +0.023 | 3: dev R, val R, MC DD 9.8% |
+| 2.0 | +0.056 | +0.053 | +7.9 | 136 | 1.28 | +0.055 / 1.27 | +0.059 / 1.28 | 68 | +0.011 | +0.021 | 3: dev R, val R, MC DD 7.7% |
+
+Sign by year, average R after base costs:
+
+| k | 2020 | 2021 | 2022 | 2023 | 2024 | 2025 H1 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 0.5 | +0.086 | +0.138 | +0.266 | +0.276 | **−0.073** | +0.176 |
+| 1.0 | +0.147 | +0.101 | +0.119 | +0.103 | +0.149 | +0.017 |
+| 1.5 | +0.086 | +0.070 | +0.062 | +0.064 | +0.108 | +0.014 |
+| 2.0 | +0.053 | +0.072 | +0.037 | +0.060 | +0.085 | +0.008 |
+
+Every point beats its random-entry and random-direction p95 and is positive
+at the Stress tier. All ±20% neighbours of each fixed point are positive over
+the span. The fixed-point deflated Sharpes are 0.98-0.996.
+
+### The 2018 independent check (frozen k = 0.5)
+
+Data: 305,647 one-minute bars (89% of the median year), 99.3% of
+regular-session minutes quoted, so the year is included. CFD mid 6,331.90
+against the published 6,329.96 on 2018-12-31 (+0.03%). The first trade is
+2018-01-22, after the 14-session warm-up.
+
+| Rule | k = 0.5 (the check) | Round 1 band stop (information) |
+| --- | --- | --- |
+| Trades (≥ 150) | 200, pass | 200, pass |
+| (a) Avg R after base costs (> 0) | **+0.533**, pass | +0.058, pass |
+| (b) minus exposure-matched B&H (> 0) | +0.532, pass | +0.058, pass |
+| (c) minus random-entry p95 (> 0) | +0.399 (p95 +0.134), pass | +0.031, pass |
+| (e) Avg R at 2.0 pt Stress (> 0) | +0.510, pass | +0.054, pass |
+| (f) minus random-direction p95 (> 0) | +0.159 (p95 +0.374), pass | +0.020, pass |
+| **Verdict** | **PASS (6 of 6)** | (information) |
+| Profit factor | 1.88 | 1.47 |
+| Net points per trade | +9.6 | +7.7 |
+| Median 1R | 15.6 pt | 104 pt |
+| Stops hit | 97 (2 gaps) | 0 |
+| Max drawdown in trade order | 23.8 R | 4.2 R |
+
+The T0 gate table, as information, for the k = 0.5 check: it fails the
+300-trade gate (200), the Monte Carlo drawdown gate (9.3%) and the year-share
+gate (one year is 100% by definition). It passes the rest, including the
+deflated Sharpe (1.00) and all ±20% neighbours (+0.40 to +0.63 R).
+
+The 2018 result is very lumpy. The 10 best trades made 91% of the year's R.
+By quarter: Q1 +0.89 R a trade (47 trades, the February volatility spike),
+Q2 −0.01, Q3 +0.52, Q4 +0.78 (the autumn sell-off). Shorts made +1.04 R a
+trade (91), longs +0.11 (109). Both 2018 versions had the same 200 entries.
+
+## What this says (round 2)
+
+- **A closer stop turns the same trades into a bigger R, but it doesn't add
+  points.** Round 1 made about +7.7 points a trade. Round 2's verdict run made
+  +7.3, and the fixed points made +6.4 to +8.4. The edge in points barely
+  moved. What changed is the unit: a 35-70 point 1R instead of 241. That
+  lifts R per trade from +0.02 to +0.06 to +0.15. Round 1's write-up
+  expected exactly this. The open question was always whether the edge holds
+  up when the stop actually gets hit. It mostly does: the k = 1.0 and k = 0.5
+  versions cut 277 and 561 trades early and still made similar points.
+- **But the declared test failed, for a real reason.** The walk-forward
+  drifted to the tightest stop (k = 0.5) because 2022-2023 rewarded it. Then
+  validation gave it +0.009 R (PF 1.02), and 2024 lost money. That is the
+  pattern of a parameter picked in one regime and failing in the next. Its
+  dev-to-validation gap (+0.20 R to +0.01 R) is the main warning in this
+  round.
+- **k = 1.0 looks like the most stable point, and that can't be used.** Held
+  fixed, it is positive in every year (+0.02 to +0.15 R). It makes +0.106 R
+  with PF 1.27 on validation and passes every gate a fixed point can be judged
+  on except the drawdown gate. But that judgment uses the validation result.
+  Choosing k = 1.0 now would be selection on validation, the very thing the
+  segments exist to prevent. It is a hypothesis for a future declared round,
+  not a result.
+- **The 2018 check passed, strongly and independently.** It used the
+  pre-declared frozen point, on a year no ATLAS run had ever traded. It beat
+  random direction, random entry and buy-and-hold, and was positive at 2.0 pt.
+  Round 1's band-stop version also stayed positive in 2018 (+7.7 points a
+  trade, the same as 2020-2025). So the strategy's sign held in a third,
+  out-of-period year, a bearish one. That is the best evidence ATLAS has that
+  this effect is real. The size is not reliable: 2018's +0.53 R comes from 10
+  trades in two volatile quarters.
+- **The Monte Carlo drawdown gate is now a binding limit.** At 0.4% risk per
+  trade, every tighter-stop version has a p95 drawdown of 7.7-21.7% against a
+  6% limit. Round 1 passed this gate only because its huge 1R made each trade
+  tiny. A 34% win rate with 1R at 35 points gives long losing streaks. Any
+  future version needs this gate in mind, as a smaller risk per trade or a
+  wider stop.
+- **Where this leaves the noise area.** It is still the most consistent
+  strategy ATLAS has tested. It is positive in points every OOS year at every
+  stop tested, and positive in 2018. It has not passed T0. A third look would
+  be a third look at the same data, so the honest next step is new data,
+  not a new parameter. Real MNQ/NQ futures prints, or the holdout once the
+  operator decides to spend it, could test it fresh. If the operator wants a
+  round 3, it should be declared with one fixed stop (no grid) before any run,
+  and say which round-2 numbers motivated it.
+
+## Round 2 caveats
+
+- This was a second look at data whose round-1 result was known. The deflated
+  Sharpe pools all 6 trials, but it can't fully price the choice to come back
+  to this strategy.
+- R isn't comparable across rounds; points are. The 2018 check's rules ask
+  only for the sign. One year (200 trades) can't confirm +0.10 R, and the
+  2018 R is dominated by a few trades.
+- Same proxy caveats as round 1: CFD mid re-quoted at one MNQ tick, not
+  futures prints. The tight k = 0.5 stop (median 15.6 pt in 2018, 35 pt in
+  2020-2025) is the most exposed to fill quality. Its stop fills are modelled
+  at the stop plus 1 tick, or at the open on a gap.
+- The holdout (July 2025 on) stayed locked and was never loaded.
+
+## Round 2 files
+
+- `atlas_research/configs/mnq.yaml`: `mnq_noise_area_r2_m5` (the 4-point stop
+  grid, `report_grid_points`), and `checks:` (the 2018 check and the round-1
+  information check).
+- `atlas_research/research_setups.py`: `noise_area` gained `stop_k` (version
+  0.2.0). The default `None` is round 1's opposite-band stop, unchanged.
+- `atlas_research/t0.py`: `points_summary` (net points per trade, median 1R in
+  points, in every run's `extra`), and `fixed_point_report` (each grid point
+  held fixed over the OOS span, when a strategy sets `report_grid_points`).
+- `atlas_research/check.py`:
+  - frozen checks can run research setups and the re-entry exit flag;
+  - the H4 coverage reference is optional and a regular-session minimum
+    (`min_rth_frac`) can be added;
+  - only declared pass rules are evaluated, plus two new ones
+    (`min_all_in_expectancy_r`, `beat_random_direction_p95`);
+  - results carry points, Stress and random-direction figures.
+  MES round 3's check is unchanged.
+- `tests/research/test_mnq_round2.py`.
+
+Reproduce:
+
+```bash
+atlas-research --config atlas_research/configs/mnq.yaml t0 run mnq_noise_area_r2_m5
+atlas-research --config atlas_research/configs/mnq.yaml t0 check mnq_noise_area_r2_2018
+atlas-research --config atlas_research/configs/mnq.yaml t0 check mnq_noise_area_r1_2018_info
+```

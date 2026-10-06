@@ -6,6 +6,8 @@
     atlas-research data import-mt5 --symbol EURUSD --file EURUSD_M1.csv
     atlas-research t0 run --all
     atlas-research t0 check <name>
+    atlas-research t0 info <name>
+    atlas-research data coverage
     atlas-research t1 run trend_pullback
     atlas-research t2 run trend_pullback
     atlas-research prop-mc --trades research/runs/<run>/oos_trades.csv
@@ -72,6 +74,25 @@ def cmd_quality(args, cfg) -> None:
         print(quality.quality_report(m1, sym).to_string())
 
 
+def cmd_coverage(args, cfg) -> None:
+    """The declared data-quality report (config ``data_checks:``): coverage per year and price checks. No trades, no R."""
+    from .check import price_check, rth_coverage
+
+    root = Path(args.data_root or cfg["data"]["root"])
+    dc = cfg["data_checks"]
+    y0, y1 = dc["years"]
+    end = min(pd.Timestamp(f"{y1 + 1}-01-01"), pd.Timestamp(cfg["segments"]["holdout_start"]))
+    m1 = rdata.load_m1(root, dc["symbol"], f"{y0}-01-01", end, cfg["segments"]["holdout_start"])
+    cov = rth_coverage(m1, (y0, y1), tuple(dc["reference_years"]), dc["min_frac"], dc["min_rth_frac"])
+    print(f"{dc['symbol']}: {len(m1):,} M1 bars, {m1.index.min()} .. {m1.index.max()}")
+    print(cov.to_string())
+    spread = (m1["ask_c"] - m1["bid_c"])
+    print("\nCFD median spread by year (points):")
+    print(spread.groupby(m1.index.year).median().to_string())
+    for c in price_check(m1, dc["price_checks"]):
+        print(f"  {c['date']}: CFD {c['cfd_mid']:.2f} vs published {c['published']:.2f} ({c['deviation']:+.2%}) {'ok' if c['ok'] else 'SCALE ERROR'}")
+
+
 def cmd_import_mt5(args, cfg) -> None:
     from atlas_engine.market_data.mt5_csv import read_mt5_bars
 
@@ -130,6 +151,28 @@ def cmd_check(args, cfg) -> None:
     for g in res["pass_rules"]:
         print(f"  {'pass' if g['passed'] else 'FAIL'}  {g['gate']}: {g['value']:+.3f} ({g['rule']})")
     print(json.dumps(res["kanban_metadata"], indent=2, default=str))
+
+
+def cmd_info(args, cfg) -> None:
+    from .daily_trend import run_information
+
+    root = Path(args.data_root or cfg["data"]["root"])
+    registry_path = Path(args.registry)
+    if (root / SYNTHETIC_MARKER).exists() and registry_path.resolve() == DEFAULT_REGISTRY.resolve():
+        sys.exit("refusing to record synthetic-data runs in the real experiment registry; pass --registry")
+    load = lambda sym, start, end: rdata.load_research_m1(root, cfg, sym, start, end)  # noqa: E731
+    res = run_information(args.name, cfg, load, Registry(registry_path))
+    out = Path(args.out) / res["experiment_id"]
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "information.json").write_text(json.dumps(res, indent=2, default=str))
+    print(f"{res['experiment_id']} (information only) -> {out}")
+    for tier, r in res["tiers"].items():
+        for seg in ("all", "dev", "validation"):
+            s, b = r[seg]["strategy"], r[seg]["buy_and_hold"]
+            print(f"  {tier:<6} {seg:<10} filter {s['total_return']:+.1%} CAGR {s['cagr']:+.1%} DD {s['max_drawdown']:.1%} Sharpe {s['sharpe']:.2f}"
+                  f" | B&H {b['total_return']:+.1%} CAGR {b['cagr']:+.1%} DD {b['max_drawdown']:.1%} Sharpe {b['sharpe']:.2f}"
+                  f" | exposure {r[seg]['exposure']:.0%} round trips {r[seg]['round_trips']}")
+        print(f"  {tier:<6} trades {r['trades']['count']}  {r['trades']['expectancy_r']:+.3f} R after costs ({r['trades']['gross_r']:+.3f} gross)")
 
 
 def cmd_t1(args, cfg) -> None:
@@ -210,6 +253,11 @@ def main(argv: list[str] | None = None) -> None:
         p.add_argument("--seed", type=int, default=7)
         p.set_defaults(fn=fn)
 
+    p = d.add_parser("coverage", help="the config's declared data-quality report (data_checks:)")
+    p.add_argument("--symbols", nargs="+")
+    p.add_argument("--data-root")
+    p.set_defaults(fn=cmd_coverage)
+
     p = d.add_parser("import-mt5", help="load a MetaTrader 5 'Export bars' file instead of Dukascopy")
     p.add_argument("--symbol", required=True)
     p.add_argument("--file", required=True)
@@ -231,6 +279,13 @@ def main(argv: list[str] | None = None) -> None:
     r.add_argument("--registry", default=str(DEFAULT_REGISTRY))
     r.add_argument("--out", default="research/runs")
     r.set_defaults(fn=cmd_check)
+
+    r = t.add_parser("info", help="an information-only run declared under `information:` (e.g. a daily trend filter)")
+    r.add_argument("name")
+    r.add_argument("--data-root")
+    r.add_argument("--registry", default=str(DEFAULT_REGISTRY))
+    r.add_argument("--out", default="research/runs")
+    r.set_defaults(fn=cmd_info)
 
     t1 = sub.add_parser("t1", help="exit research: §18 exit variants vs the fixed 2R baseline").add_subparsers(dest="cmd", required=True)
     r = t1.add_parser("run")

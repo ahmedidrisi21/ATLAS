@@ -24,6 +24,9 @@ SYMBOLS: dict[str, SymbolSpec] = {
     # (docs/mes-candidates.md). Prices in index points; 2019-03-05 decodes to ~2,790.
     # "pip" here is one MES tick (0.25 index points).
     "USA500IDXUSD": SymbolSpec("USA500IDXUSD", 1_000, 0.25),
+    # Dukascopy's Nasdaq-100 cash-index CFD, the research proxy for MNQ/NQ futures
+    # (docs/mnq-candidates.md). Prices in index points; "pip" is one MNQ tick.
+    "USATECHIDXUSD": SymbolSpec("USATECHIDXUSD", 1_000, 0.25),
 }
 
 

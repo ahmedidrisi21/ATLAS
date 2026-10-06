@@ -26,11 +26,12 @@ import pandas as pd
 
 from atlas_engine.features import sessions
 from atlas_engine.features.frame import FeatureConfig, build_features
-from atlas_engine.setups import SETUPS, EdgeFilters, Setup
+from atlas_engine.setups import EdgeFilters, Setup
 
 from . import metrics
 from .backtest import TRADE_COLS, CostModel, ExitPolicy, M1Path, TrailFrame, simulate
 from .registry import Registry
+from .research_setups import ALL_SETUPS
 
 Window = tuple[pd.Timestamp, pd.Timestamp]
 
@@ -43,6 +44,7 @@ class Market:
     costs: CostModel
     paths: dict[float, M1Path]
     trail: TrailFrame | None = None
+    all_in: CostModel | None = None  # fills at the mid, one flat all-in round-trip charge (MNQ Stress tier)
 
 
 def _ts(x) -> pd.Timestamp:
@@ -79,13 +81,15 @@ class Runner:
         self.setup, self.markets, self.exits, self.filters = setup, markets, exits, filters
         self._cache: dict = {}
 
-    def trades(self, params: dict, spread_mult: float) -> pd.DataFrame:
-        key = (json.dumps(params, sort_keys=True), spread_mult)
+    def trades(self, params: dict, spread_mult: float, all_in: bool = False) -> pd.DataFrame:
+        """Trades of one grid point; ``all_in`` fills at the mid and charges each market's flat all-in round trip."""
+        key = (json.dumps(params, sort_keys=True), spread_mult, all_in)
         if key not in self._cache:
             parts = []
             for m in self.markets:
                 sig = self.setup.signals(m.features, params, self.filters)
-                parts.append(simulate(sig, m.m1, m.costs.with_spread(spread_mult), self.exits, m.symbol, self._path(m, spread_mult), self._trail(m)))
+                costs, mult = (m.all_in, 0.0) if all_in else (m.costs.with_spread(spread_mult), spread_mult)
+                parts.append(simulate(sig, m.m1, costs, self.exits, m.symbol, self._path(m, mult), self._trail(m)))
             self._cache[key] = _concat(parts)
         return self._cache[key]
 
@@ -121,7 +125,10 @@ def _concat(parts: list[pd.DataFrame]) -> pd.DataFrame:
 def prepare_market(symbol: str, m1: pd.DataFrame, cfg: dict, bar: str = "15min") -> Market:
     c = cfg["costs"]["per_symbol"][symbol]
     costs = CostModel(spread_mult=cfg["costs"]["spread_mult"], **c)
-    return Market(symbol, m1, build_features(m1, FeatureConfig(bar=bar)), costs, {})
+    rt = (cfg["costs"].get("all_in_round_trip") or {}).get(symbol)
+    all_in = None if rt is None else CostModel(spread_mult=0.0, commission_rt=float(rt), entry_slippage=0.0, stop_slippage=0.0,
+                                                swap_per_rollover=0.0, exit_slippage=0.0)
+    return Market(symbol, m1, build_features(m1, FeatureConfig(bar=bar)), costs, {}, all_in=all_in)
 
 
 def select(trades_by_point: list[pd.DataFrame], w: Window, min_trades: int) -> int | None:
@@ -195,6 +202,40 @@ def random_control(runner: Runner, reference: pd.DataFrame, windows: list[Window
     return np.array(out)
 
 
+def random_direction(runner: Runner, reference: pd.DataFrame, runs: int, seed: int) -> np.ndarray:
+    """Expectancy of the same trades' signals with a coin-flip direction (NQ review's random-direction benchmark).
+
+    Each reference trade's decision time, stop distance from the decision
+    close and planned exit time are kept; only the direction is drawn at
+    random (the stop mirrors to the other side). Simulated at the base costs.
+    """
+    rng = np.random.default_rng(seed)
+    if reference.empty:
+        return np.array([])
+    out = []
+    by_symbol = {}
+    for m in runner.markets:
+        ref = reference.loc[reference["symbol"] == m.symbol]
+        if ref.empty:
+            continue
+        close = m.features.set_index("close_time")["close"]
+        dt_ = pd.DatetimeIndex(pd.to_datetime(ref["decision_time"], utc=True))
+        c0 = close.reindex(dt_).to_numpy(float)
+        by_symbol[m.symbol] = (ref, dt_, c0, np.abs(c0 - ref["stop"].to_numpy(float)))
+    for _ in range(runs):
+        sigs = {}
+        for sym, (ref, dt_, c0, dist) in by_symbol.items():
+            d = np.where(rng.random(len(ref)) < 0.5, 1, -1)
+            sig = pd.DataFrame({"decision_time": dt_, "direction": d, "stop": c0 - d * dist, "atr": ref["atr"].to_numpy(),
+                                "spread": ref["spread_entry"].to_numpy(), "setup": "random_direction"})
+            if "exit_by" in ref and pd.to_datetime(ref["exit_by"], utc=True).notna().all():
+                sig["exit_by"] = pd.DatetimeIndex(pd.to_datetime(ref["exit_by"], utc=True)).as_unit("ns")
+            sigs[sym] = sig.dropna(subset=["stop"])
+        t = runner.simulate_signals(sigs, runner.markets[0].costs.spread_mult)
+        out.append(t["r"].mean() if len(t) else 0.0)
+    return np.array(out)
+
+
 def buy_and_hold_r(trades: pd.DataFrame, markets: list[Market], windows: list[Window]) -> np.ndarray:
     """Per trade, the R that holding the market long over the same hours would have earned.
 
@@ -241,22 +282,26 @@ def run_t0(
     registry.check_budget(strategy, cfg["budget"]["experiments_per_strategy_per_month"], now)
     # A strategy is a setup plus its decision timeframe; variants share a setup.
     setup_name = scfg.get("setup", strategy)
-    setup = SETUPS[setup_name]
+    setup = ALL_SETUPS[setup_name]
     bar = scfg.get("bar", "15min")
     g = cfg["gates"]
     acct = cfg["account"]
     dev: Window = tuple(_ts(x) for x in cfg["segments"]["dev"])
     val: Window = tuple(_ts(x) for x in cfg["segments"]["validation"])
 
-    markets = [prepare_market(s, load_m1(s, dev[0], val[1]), cfg, bar) for s in scfg["symbols"]]
+    # Daily-indicator strategies may load earlier data to warm up; no trade before dev[0] is ever in a window.
+    load_from = dev[0] - pd.Timedelta(days=int(scfg.get("warmup_days", 0)))
+    markets = [prepare_market(s, load_m1(s, load_from, val[1]), cfg, bar) for s in scfg["symbols"]]
     # A strategy may override the T0 baseline exits (e.g. trend exits for trend following).
     ex = {**cfg["exits"], **scfg.get("exits", {})}
     exits = ExitPolicy(rr=ex["rr"], friday_flatten_utc=ex["friday_flatten_utc"],
-                       atr_trail_mult=ex.get("atr_trail_mult"), atr_trail_after_r=ex.get("atr_trail_after_r", 1.5))
+                       atr_trail_mult=ex.get("atr_trail_mult"), atr_trail_after_r=ex.get("atr_trail_after_r", 1.5),
+                       reenter_at_exit_bar=bool(ex.get("reenter_at_exit_bar", False)))
     filters = EdgeFilters(**{**cfg["filters"], **scfg.get("filters", {})})
     runner = Runner(setup, markets, exits, filters)
     base_mult = cfg["costs"]["spread_mult"]
     stress_mult = cfg["costs"]["stress_spread_mult"]
+    has_all_in = all(m.all_in is not None for m in markets) and bool(cfg["costs"].get("all_in_round_trip"))
 
     grid = [{**setup.defaults, **p} for p in expand_grid(scfg.get("grid", {}))]
     by_point = [runner.trades(p, base_mult) for p in grid]
@@ -264,7 +309,7 @@ def run_t0(
 
     # Walk-forward on dev.
     wf = cfg["walk_forward"]
-    fold_rows, oos_parts, oos_stress_parts, oos_windows = [], [], [], []
+    fold_rows, oos_parts, oos_stress_parts, oos_windows, oos_all_in_parts = [], [], [], [], []
     is_r = is_years = oos_r = oos_years = 0.0
     for train, test in walk_forward_folds(dev, wf["train_months"], wf["test_months"]):
         pick = select(by_point, train, wf["min_train_trades"])
@@ -274,6 +319,8 @@ def run_t0(
             oos_parts.append(te)
             oos_windows.append(test)
             oos_stress_parts.append(in_window(runner.trades(grid[pick], stress_mult), test))
+            if has_all_in:
+                oos_all_in_parts.append(in_window(runner.trades(grid[pick], base_mult, all_in=True), test))
             is_r += tr["r"].sum()
             is_years += (train[1] - train[0]).days / 365.25
             oos_r += te["r"].sum()
@@ -291,10 +338,12 @@ def run_t0(
 
     oos = _concat([wf_oos, val_trades])
     oos_stress = _concat(oos_stress_parts + [val_stress])
+    oos_all_in = _concat(oos_all_in_parts + [in_window(runner.trades(final, base_mult, all_in=True), val)]) if has_all_in else None
     r = oos["r"].to_numpy(float)
 
     # Every variant of a setup counts toward its deflated Sharpe trials.
-    prior = registry.trial_sharpes(setup=setup_name)
+    # ``dsr_pool`` adds earlier trials of related setups (e.g. the S&P version of the same idea).
+    prior = [x for name in [setup_name, *scfg.get("dsr_pool", [])] for x in registry.trial_sharpes(setup=name)]
     all_trials = prior + trial_sharpes
     n_trials = len(all_trials)
     var_trials = float(np.var(all_trials, ddof=1)) if n_trials > 1 else 0.0
@@ -330,15 +379,54 @@ def run_t0(
         gate("Expectancy minus random-entry p95 (R)", float(r.mean() - rand_p95) if len(r) else 0.0, ">", 0.0, "all OOS", ours),
         gate("Worst ±20% neighbour expectancy (R)", min(nbr) if nbr else 0.0, ">", 0.0, "validation", ours),
     ]
+    review = "NQ review (MNQ round 1 declaration)"
+    rand_dir = np.array([])
+    if has_all_in:
+        gates.append(gate("Expectancy at all-in Stress round trip (R)", float(oos_all_in["r"].mean()) if len(oos_all_in) else 0.0,
+                          ">", 0.0, "all OOS", review))
+    if g.get("same_sign_every_year"):
+        gates.append(gate("Worst OOS year's average R after costs", float(years["expectancy_r"].min()) if len(years) else 0.0,
+                          ">", 0.0, "all OOS, by calendar year", review))
+    if g.get("random_direction_runs"):
+        rand_dir = random_direction(runner, oos, int(g["random_direction_runs"]), seed)
+        rd_p95 = float(np.percentile(rand_dir, 95)) if len(rand_dir) else 0.0
+        gates.append(gate("Expectancy minus random-direction p95 (R)", float(r.mean() - rd_p95) if len(r) else 0.0,
+                          ">", 0.0, "all OOS", review))
+    bh = buy_and_hold_r(oos, markets, oos_windows + [val])
+    bh_mean = float(bh.mean()) if len(bh) else 0.0
     benchmark = None
     if scfg.get("benchmark") == "buy_and_hold":
-        bh = buy_and_hold_r(oos, markets, oos_windows + [val])
-        benchmark = {"kind": "buy_and_hold", "mean_r": float(bh.mean()) if len(bh) else 0.0}
+        benchmark = {"kind": "buy_and_hold", "mean_r": bh_mean}
         gates.append(gate("Expectancy minus exposure-matched buy-and-hold (R)", float(r.mean() - bh.mean()) if len(r) else 0.0,
                           ">", 0.0, "all OOS", "MES round 2 declaration"))
     elif scfg.get("benchmark") is not None:
         raise ValueError(f"{strategy}: unknown benchmark {scfg['benchmark']!r}")
     passed = all(x["passed"] for x in gates)
+
+    # Per grid point, for the write-up: dev (whole period) and validation, after costs and gross of commission.
+    grid_points = []
+    for p_, t in zip(grid, by_point):
+        td, tv = in_window(t, dev), in_window(t, val)
+        grid_points.append({"params": p_, "dev_trades": len(td), "dev_expectancy_r": float(td["r"].mean()) if len(td) else 0.0,
+                            "dev_gross_r": float(td["r_gross"].mean()) if len(td) else 0.0, "val_trades": len(tv),
+                            "val_expectancy_r": float(tv["r"].mean()) if len(tv) else 0.0})
+    by_year = {int(y): {"trades": int(row["trades"]), "expectancy_r": float(row["expectancy_r"])} for y, row in years.iterrows()}
+    if oos_all_in is not None and len(oos_all_in):
+        for y, row in metrics.breakdown(oos_all_in, "year").iterrows():
+            by_year.setdefault(int(y), {})["all_in_expectancy_r"] = float(row["expectancy_r"])
+    extra = {
+        "gross_expectancy_r": float(oos["r_gross"].mean()) if len(oos) else 0.0,
+        "all_in_expectancy_r": float(oos_all_in["r"].mean()) if oos_all_in is not None and len(oos_all_in) else None,
+        "all_in_trades": len(oos_all_in) if oos_all_in is not None else None,
+        "stress_2x_spread_expectancy_r": float(oos_stress["r"].mean()) if len(oos_stress) else 0.0,
+        "buy_and_hold_r": bh_mean,
+        "random_entry_p95": rand_p95,
+        "random_direction": {"runs": len(rand_dir), "mean": float(rand_dir.mean()) if len(rand_dir) else None,
+                             "p95": float(np.percentile(rand_dir, 95)) if len(rand_dir) else None},
+        "by_year": by_year,
+        "exit_reasons": oos["exit_reason"].value_counts().to_dict() if len(oos) else {},
+        "long_short": {int(k): {"trades": int(v.size), "expectancy_r": float(v.mean())} for k, v in oos.groupby("direction")["r"]} if len(oos) else {},
+    }
 
     exp_id = f"{strategy}-{now:%Y%m%d-%H%M%S}-" + hashlib.sha1(json.dumps([scfg, cfg["segments"]], sort_keys=True, default=str).encode()).hexdigest()[:6]
     result = {
@@ -365,6 +453,8 @@ def run_t0(
         "random_control": {"runs": len(rand), "mean": float(rand.mean()) if len(rand) else 0.0, "p95": rand_p95},
         "neighbours": nbr,
         "benchmark": benchmark,
+        "extra": extra,
+        "grid_points": grid_points,
         # Kanban handoff shape from PRD §4.
         "kanban_metadata": {
             "experiment_id": exp_id,
@@ -380,7 +470,7 @@ def run_t0(
     }
     registry.append({k: result[k] for k in (
         "experiment_id", "strategy", "setup", "bar", "exits", "strategy_version", "created_at", "hypothesis", "symbols", "data_window",
-        "grid", "trial_sharpes", "final_params", "passed", "kanban_metadata")} | {"failed_gates": [x["gate"] + " / " + x["scope"] for x in gates if not x["passed"]]})
+        "grid", "trial_sharpes", "final_params", "passed", "kanban_metadata")} | ({"extra": extra} if has_all_in or g.get("random_direction_runs") else {}) | {"failed_gates": [x["gate"] + " / " + x["scope"] for x in gates if not x["passed"]]})
 
     if out_dir is not None:
         from .report import write_report

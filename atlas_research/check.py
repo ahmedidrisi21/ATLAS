@@ -61,6 +61,42 @@ def coverage(m1: pd.DataFrame, period: Window, ref_h4: float, ref_m1: float, min
     return pd.DataFrame(rows).set_index("year")
 
 
+def rth_coverage(m1: pd.DataFrame, years: tuple[int, int], reference_years: tuple[int, int], min_frac: float,
+                 min_rth_frac: float) -> pd.DataFrame:
+    """Per calendar year (MNQ round 1 data rule): M1 bars against the median full reference year, and the
+    share of regular-session minutes (09:30-16:00 New York on exchange trading days) that have a quote.
+
+    A year under ``min_frac`` of the median or under ``min_rth_frac`` of its
+    regular-session minutes is flagged. Partial years (the first and last of
+    the data) are judged on their regular-session share only.
+    """
+    from .research_setups import trading_day
+
+    loc = m1.index.tz_convert(NY)
+    mins = loc.hour * 60 + loc.minute
+    dates = pd.Index(loc.date)
+    m1_years = m1.index.year
+    ref = [int((m1_years == y).sum()) for y in range(reference_years[0], reference_years[1] + 1)]
+    median = float(np.median(ref)) if ref else float("nan")
+    first, last = m1.index.min(), m1.index.max()
+    rows = []
+    for y in range(years[0], years[1] + 1):
+        lo = max(pd.Timestamp(f"{y}-01-01"), pd.Timestamp(first.tz_convert(NY).date()))
+        hi = min(pd.Timestamp(f"{y}-12-31"), pd.Timestamp(last.tz_convert(NY).date()))
+        cal = pd.date_range(lo, hi, freq="D").date if lo <= hi else []
+        tdays = set(np.asarray(cal, dtype=object)[trading_day(cal)]) if len(cal) else set()
+        rth = (mins >= 570) & (mins < 960) & np.isin(np.asarray(dates, dtype=object), list(tdays))
+        n_m1 = int((m1_years == y).sum())
+        full = lo == pd.Timestamp(f"{y}-01-01") and hi == pd.Timestamp(f"{y}-12-31")
+        rth_frac = int(rth.sum()) / (390 * len(tdays)) if tdays else 0.0
+        days_with = len(set(np.asarray(dates[rth], dtype=object)))
+        frac = n_m1 / median if median else float("nan")
+        rows.append({"year": y, "m1_bars": n_m1, "m1_frac_of_median": frac if full else None, "trading_days": len(tdays),
+                     "days_with_rth_quotes": days_with, "rth_frac": rth_frac,
+                     "flagged": bool(rth_frac < min_rth_frac or (full and frac < min_frac))})
+    return pd.DataFrame(rows).set_index("year")
+
+
 def price_check(m1: pd.DataFrame, closes: dict, tol: float = 0.01) -> list[dict]:
     """Mid price at the last bar by 16:00 New York on each date, against the published close."""
     mid = (m1["bid_c"] + m1["ask_c"]) / 2

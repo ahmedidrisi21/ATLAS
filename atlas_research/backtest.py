@@ -18,6 +18,9 @@
   trail, a Friday flatten or an ``exit_by`` on every signal must close trades.
 - A signal may carry ``exit_by``: the trade closes at market at the first bar
   at/after that time if neither stop nor target has been hit (time exit).
+- ``reenter_at_exit_bar`` (default False) lets a new signal fill on the bar
+  where the previous trade time-exited (an exit and an opposite entry at the
+  same checkpoint, e.g. the noise-area strategy's reversals).
 """
 
 from __future__ import annotations
@@ -60,6 +63,7 @@ class ExitPolicy:
     max_entry_delay_min: int = 5
     atr_trail_mult: float | None = None
     atr_trail_after_r: float = 1.5
+    reenter_at_exit_bar: bool = False
 
 
 @dataclass(frozen=True)
@@ -144,7 +148,7 @@ def simulate(
             j, exit_px, reason = _scan(p, i0, d, stop, target, fri, costs.stop_slippage, t_exit)
         if reason in ("time_exit", "friday_flatten"):
             exit_px -= d * costs.exit_slippage
-        busy_until = p.t[j] + 1
+        busy_until = p.t[j] + (0 if exits.reenter_at_exit_bar and reason == "time_exit" else 1)
         hi = p.bid_h if d == 1 else p.ask_h
         lo = p.bid_l if d == 1 else p.ask_l
         fav = (hi[i0 : j + 1].max() - entry) if d == 1 else (entry - lo[i0 : j + 1].min())

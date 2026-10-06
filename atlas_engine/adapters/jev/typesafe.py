@@ -95,13 +95,18 @@ class TypeSafeTransport:
         status, raw = self.post(self.url, payload, headers, self.timeout_s)
         if status != 200:
             raise TypeSafeError(f"http_{status}")
-        return self.parse(request["setup_id"], json.loads(raw))
+        nouls = [k for k, q in request["questions"].items() if q.get("type") == "noul"]
+        return self.parse(request["setup_id"], json.loads(raw), nouls[0] if nouls else "p_target_first")
 
-    def parse(self, setup_id: str, resp: dict) -> dict:
-        """Map a System One response onto the adapter's answer schema; the adapter validates ranges."""
+    def parse(self, setup_id: str, resp: dict, yes_id: str = "p_target_first") -> dict:
+        """Map a System One response onto the adapter's answer schema; the adapter validates ranges.
+
+        ``yes_id`` is the request's Noul (``p_target_first``, or ``p_profit`` for the research noise set);
+        its probability is returned as ``p_target_first``.
+        """
         try:
             answers = resp["answers"]
-            noul, choice = answers["p_target_first"], answers["regime"]
+            noul, choice = answers[yes_id], answers["regime"]
             if noul.get("type") != "noul" or choice.get("type") != "choice":
                 raise TypeSafeError("answer_type")
             codes = []

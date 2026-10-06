@@ -1,8 +1,11 @@
 """What the engine sees of a broker: plain, UTC-timed records (PRD §21).
 
-The MT5 adapter converts the terminal's records into these, so the execution,
-reconciliation and engine code never touches the ``MetaTrader5`` package or
-broker server time.
+Every platform adapter (MT5, Tradovate) converts its own records into these,
+so the execution, reconciliation and engine code never touches a platform's
+package, wire format or server time. For a futures broker ``symbol`` is the
+product root (``MES``); the contract actually traded is in
+``SymbolRules.contract``, ``volume`` counts contracts, and ``ticket`` is the
+entry order of one ATLAS bracket.
 """
 
 from __future__ import annotations
@@ -23,6 +26,8 @@ class Tick:
     time: dt.datetime  # UTC
     bid: float
     ask: float
+    last: float | None = None  # last trade, where the platform reports one (futures)
+    volume: float | None = None  # session volume so far, where reported
 
     @property
     def spread(self) -> float:
@@ -55,6 +60,7 @@ class SymbolRules:
     filling_mode: int  # SYMBOL_FILLING_* bit flags
     trade_mode: str  # full | long_only | short_only | close_only | disabled
     spec: ContractSpec
+    contract: object | None = None  # futures: the FuturesContract traded for this product (expiry, first notice)
 
     def round_price(self, price: float) -> float:
         return round(price, self.digits)

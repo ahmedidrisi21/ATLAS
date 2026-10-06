@@ -1,0 +1,21 @@
+# Internal risk limits for the FundedNext Flex 50K example. The firm's max loss
+# is $1,500 (3%) trailing, with no daily limit, so every limit here is smaller
+# than the forex file's. The loader refuses any value outside the firm's limits.
+
+risk_per_trade_pct: 0.25           # $125 on 50K: 2 MES at a 10-point stop
+daily_loss_soft_pct_of_firm: 0.50  # no firm daily limit: shares of the max-loss allowance
+daily_loss_hard_pct_of_firm: 0.75
+drawdown_stop_pct_of_firm: 0.60
+drawdown_halve_pct_of_internal: 0.50
+max_open_risk_pct: 0.5
+max_currency_risk_pct: 0.5         # futures: per asset group (us_equity_index, energy, metals)
+max_trades_per_day: 4
+loss_streak_halve_after: 4
+loss_streak_halve_trades: 10
+reduced_risk_multiplier: 0.5
+max_sizing_overshoot: 1.10
+correlation:
+  threshold: 0.70
+  window_days: 60
+  max_age_days: 8
+  one_bet_max_risk_pct: null

@@ -1,0 +1,10 @@
+# ATLAS profile distribution. `description` is also this profile's Kanban routing
+# description: deploy/hermes/bootstrap.py applies it with `hermes profile describe`.
+name: atlas-journal
+version: 0.1.0
+description: 'Keeps the record: trade journals, decision records (why the engine allowed or rejected a trade),
+  experiment records, failure analysis and research history. Reconstructs a trade from the journal, never from memory.'
+hermes_requires: '>=0.21.4'
+author: ATLAS
+license: UNLICENSED
+env_requires: []

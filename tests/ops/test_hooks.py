@@ -27,13 +27,13 @@ def test_ignores_non_atlas_tools(ops_dir):
 
 
 def test_disable_trading_is_audited_and_alerted(ops_dir, monkeypatch):
-    monkeypatch.setenv("HERMES_PROFILE", "operations-monitor")
+    monkeypatch.setenv("HERMES_PROFILE", "atlas-operations")
     monkeypatch.setenv("HERMES_KANBAN_BOARD", "atlas-ops")
     monkeypatch.setenv("HERMES_KANBAN_TASK", "t_42")
     hooks.on_post_tool_call(tool_name="mcp__atlas_operations__disable_trading",
                             args={"reason": "HALT: mt5_disconnected"}, result=OK, session_id="s1", duration_ms=12)
     [a] = audit()
-    assert a["profile"] == "operations-monitor" and a["board"] == "atlas-ops" and a["kanban_task"] == "t_42"
+    assert a["profile"] == "atlas-operations" and a["board"] == "atlas-ops" and a["kanban_task"] == "t_42"
     assert a["server"] == "atlas-operations" and a["tool"] == "disable_trading" and a["write"] is True
     assert a["outcome"] == "ok" and a["detail"] == {"trading_enabled": False, "already_disabled": False,
                                                     "source": "simulated"}
@@ -56,13 +56,13 @@ def test_reads_are_audited_without_alerts(ops_dir):
 
 
 def test_refusals_are_audited_and_alerted(ops_dir, monkeypatch):
-    monkeypatch.setenv("HERMES_PROFILE", "strategy-researcher")
+    monkeypatch.setenv("HERMES_PROFILE", "atlas-research")
     hooks.on_post_tool_call(tool_name="mcp__atlas_backtest__run_backtest", args={"strategy": "s", "window": "holdout"},
                             result=REFUSED)
     [a] = audit()
     assert a["outcome"] == "refused" and a["code"] == "holdout_refused" and a["write"] is True
     [al] = alerts()
-    assert al["severity"] == "warning" and "strategy-researcher was refused atlas-backtest.run_backtest" in al["text"]
+    assert al["severity"] == "warning" and "atlas-research was refused atlas-backtest.run_backtest" in al["text"]
 
 
 def test_refusal_alerts_can_be_turned_off(ops_dir):
@@ -99,32 +99,32 @@ def test_parse_result(result, expected):
 
 
 def test_usage_records_board_and_profile(ops_dir, monkeypatch):
-    monkeypatch.setenv("HERMES_PROFILE", "strategy-researcher")
+    monkeypatch.setenv("HERMES_PROFILE", "atlas-research")
     monkeypatch.setenv("HERMES_KANBAN_BOARD", "atlas-research")
     hooks.on_post_api_request(usage={"input_tokens": 1200, "output_tokens": 300, "cache_read_tokens": 800},
                               model="claude-sonnet-5", provider="anthropic", session_id="s")
     hooks.on_post_api_request(usage=None)
     [u] = store.read(store.USAGE)
     assert (u["profile"], u["board"], u["input_tokens"], u["output_tokens"]) == \
-        ("strategy-researcher", "atlas-research", 1200, 300)
+        ("atlas-research", "atlas-research", 1200, 300)
 
 
 def test_kanban_alerts_only_for_atlas_ops(ops_dir):
-    hooks.on_kanban_task_blocked(task_id="t1", board="atlas-research", assignee="risk-analyst", reason="needs input")
+    hooks.on_kanban_task_blocked(task_id="t1", board="atlas-research", assignee="atlas-risk", reason="needs input")
     hooks.on_kanban_task_completed(task_id="t2", board="atlas-research", assignee="x", summary="done")
     assert alerts() == []
-    hooks.on_kanban_task_blocked(task_id="t3", board="atlas-ops", assignee="operations-monitor",
+    hooks.on_kanban_task_blocked(task_id="t3", board="atlas-ops", assignee="atlas-operations",
                                  reason="Operator: re-enable after MT5 reconnects")
-    hooks.on_kanban_task_completed(task_id="t4", board="atlas-ops", assignee="operations-monitor", summary="cleared")
+    hooks.on_kanban_task_completed(task_id="t4", board="atlas-ops", assignee="atlas-operations", summary="cleared")
     a = alerts()
     assert [x["severity"] for x in a] == ["warning", "info"]
     assert "t3" in a[0]["text"] and "re-enable after MT5 reconnects" in a[0]["text"]
 
 
 def test_worker_crash_alerts_on_any_board(ops_dir):
-    hooks.on_kanban_worker_exited(task_id="t9", board="atlas-research", assignee="jev-analyst", exit_kind="signal",
+    hooks.on_kanban_worker_exited(task_id="t9", board="atlas-research", assignee="atlas-models", exit_kind="signal",
                                   exit_code=-9, outcome="crashed", retry_status="retrying")
-    assert "jev-analyst worker on atlas-research card t9 exited" in alerts()[0]["text"]
+    assert "atlas-models worker on atlas-research card t9 exited" in alerts()[0]["text"]
 
 
 def test_register_wires_every_hook():

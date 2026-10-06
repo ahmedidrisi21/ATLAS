@@ -36,7 +36,7 @@ def test_overview_panels(ops_dir, engine, tmp_path, monkeypatch):
     hooks.on_post_tool_call(tool_name="mcp__atlas_operations__disable_trading", args={"reason": "drill"},
                             result=json.dumps({"result": json.dumps({"trading_enabled": False})}))
     engine.inject("mt5_disconnect")
-    engine.disable_trading("operations-monitor/atlas-operations", "drill")
+    engine.disable_trading("atlas-operations/atlas-operations", "drill")
 
     o = dashboard.overview(Client(engine), T0)
     assert o["engine"]["ok"] and o["engine"]["health"]["state"] == "HALT"

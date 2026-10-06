@@ -22,7 +22,7 @@ Find out whether any declared exit rule beats the fixed 2 R baseline out of samp
 - A card asks for T1 exit research on a strategy, or whether a time stop, breakeven, partial close, trail, session exit or invalidation exit helps.
 - An `mfe-mae-analysis` card proposed an exit experiment.
 
-Don't use for: entry or parameter research (use the setup's research skill), or new exit rules that are not declared (those are a backtest-engineer card to add a variant, since every variant is a trial).
+Don't use for: entry or parameter research (use the setup's research skill), or new exit rules that are not declared (those are a atlas-backtest card to add a variant, since every variant is a trial).
 
 ## Required inputs
 

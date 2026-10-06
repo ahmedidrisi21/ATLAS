@@ -24,7 +24,7 @@ class EdgeFilters:
 
     max_spread_to_stop: float = 0.20
     after_open_minutes: int = 15
-    friday_no_entry_after_utc: str = "18:00"
+    friday_no_entry_after_utc: str | None = "18:00"  # None: Friday entries allowed (intraday setups)
 
 
 @dataclass(frozen=True)
@@ -83,3 +83,39 @@ def apply_edge_filters(signals: pd.DataFrame, features: pd.DataFrame, f: EdgeFil
     if not session_based:
         keep &= ~sessions.after_open_blackout(t, f.after_open_minutes)
     return s.loc[keep].reset_index(drop=True)
+
+
+# New York clock helpers for time-of-day setups (stock-index futures).
+
+
+def ny_close_clock(features: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
+    """Each decision bar's close as New York (date, minutes after midnight), indexed like ``features``."""
+    ct = pd.DatetimeIndex(features["close_time"])
+    date = pd.Series(np.asarray(sessions.local_date(ct, sessions.NEW_YORK)), index=features.index)
+    mins = pd.Series(sessions.local_minutes(ct, sessions.NEW_YORK), index=features.index)
+    return date, mins
+
+
+def close_at(features: pd.DataFrame, hhmm: str) -> pd.Series:
+    """Close of the decision bar that closes at ``hhmm`` New York, by New York date."""
+    date, mins = ny_close_clock(features)
+    at = mins == sessions._hhmm(hhmm)
+    return features.loc[at, "close"].groupby(date[at]).last()
+
+
+def ny_time(days, hhmm: str) -> pd.DatetimeIndex:
+    """``hhmm`` New York on each date in ``days``, in UTC (DST-aware)."""
+    local = pd.to_datetime(pd.Series(days).astype(str)) + pd.Timedelta(minutes=sessions._hhmm(hhmm))
+    return pd.DatetimeIndex(local).tz_localize(sessions.NEW_YORK).tz_convert("UTC")
+
+
+def timed_signals(features: pd.DataFrame, rows: pd.Series, direction: pd.Series, sl_atr: float, exit_by: pd.Series) -> pd.DataFrame:
+    """Signals at the bars flagged in ``rows``: stop ``sl_atr`` x ATR from the close, time exit ``exit_by``."""
+    out = []
+    for d in (1, -1):
+        hit = rows & (direction == d)
+        stop = features["close"] - d * sl_atr * features["atr"]
+        sig = emit(features, hit, d, stop)
+        sig["exit_by"] = pd.DatetimeIndex(exit_by.loc[hit.fillna(False) & stop.notna()]).as_unit("ns")
+        out.append(sig)
+    return pd.concat(out, ignore_index=True)

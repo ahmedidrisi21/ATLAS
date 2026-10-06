@@ -24,6 +24,7 @@ from dataclasses import asdict, dataclass, field
 
 from atlas_engine.config import EngineConfig
 from atlas_engine.exposure.netting import CorrelationMatrix, Exposure, correlated_with, currency_risk, legs
+from atlas_engine.prop_rules.policy import PolicyContext, PolicyTrade, PropPolicy, StandardPropPolicy
 from atlas_engine.sizing.lots import ContractSpec, contract, size_position
 
 _EPS = 1e-9
@@ -60,6 +61,7 @@ class TradeProposal:
     rates: dict[str, float] = field(default_factory=dict)  # mid prices for currency conversion
     news_events: tuple[dt.datetime, ...] = ()  # restricted releases near entry (prop rules)
     spec: ContractSpec | None = None  # broker's contract spec; static table if None
+    target: float | None = None  # the planned target, for prop rules on bracket width and daily profit
 
 
 @dataclass
@@ -120,9 +122,10 @@ class RiskDecision:
 
 
 class RiskEngine:
-    def __init__(self, cfg: EngineConfig, state: RiskState | None = None):
+    def __init__(self, cfg: EngineConfig, state: RiskState | None = None, policy: PropPolicy | None = None):
         self.cfg = cfg
         self.state = state or RiskState(cfg.initial_balance, high_water=cfg.initial_balance)
+        self.policy = policy or StandardPropPolicy(cfg.prop)  # the firm's per-trade rules (prop stage)
         self.events: list[dict] = []  # latch changes for the journal; the caller drains it
 
     # -- account monitoring ---------------------------------------------------
@@ -229,18 +232,28 @@ class RiskEngine:
             reasons.append("position_exists_for_setup")  # one per setup per symbol; no pyramiding
         if s.trades_today >= r.max_trades_per_day:
             reasons.append("max_trades_per_day")
-        restr = cfg.prop.restrictions_for(cfg.mode)
-        if restr.news_blocked(snap.time, list(prop.news_events)):
-            reasons.append("prop_news_window")
+        spec = prop.spec or contract(prop.symbol)
+        pctx = PolicyContext(snap.time, cfg.mode, cfg.phase, s.initial_balance, snap.equity - s.day_start_balance,
+                             snap.positions, tuple(prop.news_events))
+        trade = PolicyTrade(prop.symbol, prop.direction, prop.entry, prop.stop, prop.target, spec.tick_size)
+        reasons += self.policy.entry_reasons(trade, pctx)
+        cap = self.policy.max_contracts(prop.symbol, pctx)
+        checks["prop"] = {"policy": self.policy.name, "version": getattr(self.policy, "version", None),
+                          "max_volume": cap}
+        if cap is not None and cap + _EPS < spec.volume_min:
+            reasons.append("prop_contract_limit")
 
         m = a.multiplier * min(max(prop.ev_scale, 0.0), 1.0)
         checks["multiplier"] = m
-        spec = prop.spec or contract(prop.symbol)
         size = size_position(snap.equity, r.risk_per_trade_pct, m, max(sl_distance, 0.0), spec, cfg.currency,
-                             prop.rates, cfg.prop.max_lot, r.max_sizing_overshoot)
+                             prop.rates, cap if cap is None or cap >= spec.volume_min else spec.volume_min,
+                             r.max_sizing_overshoot)
         checks["sizing"] = size.to_dict()
         if not size.ok and "stop_on_wrong_side" not in reasons:
             reasons.append(size.reason or "sizing_failed")
+        if size.ok and prop.target is not None and sl_distance > 0:
+            reward = size.volume * abs(prop.target - prop.entry) / spec.tick_size * spec.tick_value(cfg.currency, prop.rates)
+            reasons += self.policy.sized_reasons(trade, size.volume, reward, pctx)
         new_risk = size.risk_amount if size.ok else 0.0
         new_pct = new_risk / snap.equity * 100 if snap.equity > 0 else 0.0
 

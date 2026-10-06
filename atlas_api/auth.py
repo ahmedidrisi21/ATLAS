@@ -4,7 +4,7 @@ Tokens are random strings handed to one MCP server of one profile. Only their
 SHA-256 is stored, in a YAML file owned by the engine's OS user:
 
     tokens:
-      - name: risk-analyst/atlas-backtest
+      - name: atlas-risk/atlas-backtest
         sha256: 5f1c...
         scopes: [backtest:read]
 """

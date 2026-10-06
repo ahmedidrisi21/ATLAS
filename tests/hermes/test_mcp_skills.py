@@ -22,15 +22,17 @@ SKILL_NAMES = sorted(d.name for d in SKILLS.iterdir() if d.is_dir())
 # PRD §3 MCP column, as far as H2 and H3 build it (atlas-research and atlas-trading come later).
 PRD_MCP = {
     "atlas-orchestrator": {"atlas-journal", "atlas-performance"},
-    "market-researcher": {"atlas-market"},
-    "strategy-researcher": {"atlas-backtest"},
-    "backtest-engineer": {"atlas-backtest"},
-    "risk-analyst": {"atlas-backtest", "atlas-journal", "atlas-performance"},
-    "execution-engineer": {"atlas-operations"},
-    "performance-analyst": {"atlas-journal", "atlas-performance"},
-    "data-engineer": {"atlas-market"},
-    "jev-analyst": {"atlas-backtest"},
-    "operations-monitor": {"atlas-operations"},
+    "atlas-market": {"atlas-market"},
+    "atlas-research": {"atlas-backtest"},
+    "atlas-backtest": {"atlas-backtest"},
+    "atlas-risk": {"atlas-backtest", "atlas-journal", "atlas-performance"},
+    "atlas-execution": {"atlas-operations"},
+    "atlas-performance": {"atlas-journal", "atlas-performance"},
+    "atlas-data": {"atlas-market"},
+    "atlas-models": {"atlas-backtest"},
+    "atlas-operations": {"atlas-operations"},
+    "atlas-trading": {"atlas-trading", "atlas-operations"},
+    "atlas-journal": {"atlas-journal"},
 }
 # PRD §7 required sections, and the constraint lines every research skill carries.
 SECTIONS = ["Objective", "When to use", "Required inputs", "Procedure", "Tools", "Output format",
@@ -94,15 +96,18 @@ def test_no_literal_secrets_in_config(name):
 def test_scopes_follow_the_permission_model():
     # Only the roles that design or build experiments may spend the experiment budget.
     runners = {n for n in NAMES if "backtest:run" in scopes(n)}
-    assert runners == {"strategy-researcher", "backtest-engineer", "jev-analyst"}
+    assert runners == {"atlas-research", "atlas-backtest", "atlas-models"}
     # PRD §3: the orchestrator reads the journal and performance, nothing else.
     assert scopes("atlas-orchestrator") == {"journal:read", "performance:read"}
-    # PRD §3: risk-analyst reads backtests; it cannot start one.
-    assert scopes("risk-analyst") == {"backtest:read", "journal:read", "performance:read"}
-    # PRD §3, §23: operations-monitor reads the engine and may only disable; execution-engineer only reads.
-    assert scopes("operations-monitor") == {"ops:read", "ops:disable_trading"}
-    assert scopes("execution-engineer") == {"ops:read"}
-    assert {n for n in NAMES if "ops:disable_trading" in scopes(n)} == {"operations-monitor"}
+    # PRD §3: atlas-risk reads backtests; it cannot start one.
+    assert scopes("atlas-risk") == {"backtest:read", "journal:read", "performance:read"}
+    # PRD §3, §23: atlas-operations reads the engine and may only disable; atlas-execution only reads.
+    assert scopes("atlas-operations") == {"ops:read", "ops:disable_trading"}
+    assert scopes("atlas-execution") == {"ops:read"}
+    assert {n for n in NAMES if "ops:disable_trading" in scopes(n)} == {"atlas-operations"}
+    # Only the trader trades, demo only (the engine checks the account), and it reads ops without disabling.
+    assert {n for n in NAMES if scopes(n) & {"trading:read", "trading:demo"}} == {"atlas-trading"}
+    assert scopes("atlas-trading") == {"trading:read", "trading:demo", "ops:read"}
     for n in NAMES:
         assert scopes(n) <= set(SCOPES) | set(ENGINE_SCOPES)
 
@@ -122,7 +127,7 @@ def test_scope_map_matches_the_servers():
     from mcp.client import Client
 
     from atlas_api.http import ROUTES
-    from atlas_api.ops import OPS_ROUTES
+    from atlas_api.trading import ENGINE_ROUTES
     from atlas_mcp.servers import SERVERS
 
     route_scope = {  # mirrors ResearchService and OpsService: each method's p.require(...)
@@ -131,6 +136,8 @@ def test_scope_map_matches_the_servers():
         "backtest/list_runs": "backtest:read", "backtest/summary": "backtest:read",
         "backtest/monte_carlo": "backtest:read", "journal": "journal:read", "performance": "performance:read",
         "operations": "ops:read", "operations/disable_trading": "ops:disable_trading",
+        "trading": "trading:read", "trading/submit_intent": "trading:demo",
+        "trading/close_position": "trading:demo", "trading/tighten_stop": "trading:demo",
     }
 
     def scope_of(route):
@@ -144,7 +151,9 @@ def test_scope_map_matches_the_servers():
             for t in (await c.list_tools()).tools:
                 calls.clear()
                 args = {k: {"symbol": "EURUSD", "symbols": ["EURUSD"], "timeframe": "H1", "window": "dev",
-                            "strategy": "s", "run_id": "r", "reason": "drill reason text"}[k]
+                            "strategy": "s", "run_id": "r", "reason": "drill reason text",
+                            "intent_id": "i-0001", "direction": "buy", "stop": 1.1, "target": 1.2,
+                            "confidence": 0.5, "thesis": "x" * 40, "ticket": 1, "new_stop": 1.15}[k]
                         for k in t.input_schema.get("required", [])}
                 await c.call_tool(t.name, args)
                 out[t.name] = calls["route"]
@@ -154,18 +163,18 @@ def test_scope_map_matches_the_servers():
         routes = asyncio.run(tool_routes(server))
         assert set(routes) == set(tools)
         for tool, route in routes.items():
-            assert route in (OPS_ROUTES if api_of(server) == "engine" else ROUTES)
+            assert route in (ENGINE_ROUTES if api_of(server) == "engine" else ROUTES)
             assert tools[tool] == scope_of(route), (server, tool, route)
 
 
 # ---------------------------------------------------------------- skills
 
 def test_skills():
-    # The first 8 (H2), incident-triage (H3) and exit-research (T1).
+    # The first 8 (H2), incident-triage (H3), exit-research (T1) and demo-trading (the trader).
     assert SKILL_NAMES == sorted([
         "forex-market-analysis", "trend-pullback-research", "session-breakout-research",
         "liquidity-sweep-research", "backtest-analysis", "mfe-mae-analysis", "risk-review", "data-quality",
-        "incident-triage", "exit-research"])
+        "incident-triage", "exit-research", "demo-trading"])
 
 
 def _skill(name):
@@ -247,9 +256,9 @@ def bootstrap():
 
 
 def test_stage_distribution_bundles_pinned_skills(bootstrap, tmp_path):
-    stage = bootstrap.stage_distribution("strategy-researcher", ROSTER["strategy-researcher"]["skills"], tmp_path)
+    stage = bootstrap.stage_distribution("atlas-research", ROSTER["atlas-research"]["skills"], tmp_path)
     got = sorted(p.parent.name for p in (stage / "skills" / "atlas").glob("*/SKILL.md"))
-    assert got == sorted(ROSTER["strategy-researcher"]["skills"])
+    assert got == sorted(ROSTER["atlas-research"]["skills"])
     assert (stage / "config.yaml").is_file() and (stage / "SOUL.md").is_file()
 
 
@@ -266,7 +275,7 @@ def test_prune_removes_unpinned_atlas_skills_only(bootstrap, tmp_path):
 def test_issue_mcp_tokens(bootstrap, tmp_path):
     home, tokens = tmp_path / "hermes", tmp_path / "engine" / "api-tokens.yaml"
     engine_tokens, engine_url = tmp_path / "engine" / "engine-tokens.yaml", "http://127.0.0.1:8742"
-    env_path = home / "profiles" / "risk-analyst" / ".env"
+    env_path = home / "profiles" / "atlas-risk" / ".env"
     env_path.parent.mkdir(parents=True)
     env_path.write_text("TELEGRAM_BOT_TOKEN=keep-me\n")
 
@@ -282,7 +291,7 @@ def test_issue_mcp_tokens(bootstrap, tmp_path):
     assert oct(env_path.stat().st_mode & 0o777) == "0o600"
     store = TokenStore.load(tokens)
     p = store.authenticate(env["ATLAS_TOKEN_BACKTEST"])
-    assert p.name == "risk-analyst/atlas-backtest" and p.scopes == {"backtest:read"}
+    assert p.name == "atlas-risk/atlas-backtest" and p.scopes == {"backtest:read"}
     assert env["ATLAS_TOKEN_BACKTEST"] not in tokens.read_text()
     # Every (profile, server) pair got its own token in its API's file.
     names = {t["name"] for t in yaml.safe_load(tokens.read_text())["tokens"]}
@@ -290,10 +299,10 @@ def test_issue_mcp_tokens(bootstrap, tmp_path):
     assert names == {f"{n}/{s}" for n, s in pairs if api_of(s) == "research"}
     engine_names = {t["name"] for t in yaml.safe_load(engine_tokens.read_text())["tokens"]}
     assert engine_names == {f"{n}/{s}" for n, s in pairs if api_of(s) == "engine"} | {
-        "operations-monitor/cron", "atlas-orchestrator/dashboard"}
+        "atlas-operations/cron", "atlas-orchestrator/dashboard"}
 
-    # operations-monitor: its MCP token may disable; its cron token only reads. Neither works on the research API.
-    om = bootstrap.read_env(home / "profiles" / "operations-monitor" / ".env")
+    # atlas-operations: its MCP token may disable; its cron token only reads. Neither works on the research API.
+    om = bootstrap.read_env(home / "profiles" / "atlas-operations" / ".env")
     assert om["ATLAS_ENGINE_URL"] == engine_url and "ATLAS_API_URL" not in om
     estore = TokenStore.load(engine_tokens, ENGINE_SCOPES)
     assert estore.authenticate(om["ATLAS_TOKEN_OPERATIONS"]).scopes == {"ops:read", "ops:disable_trading"}
@@ -305,16 +314,16 @@ def test_issue_mcp_tokens(bootstrap, tmp_path):
         estore.authenticate(env["ATLAS_TOKEN_BACKTEST"])
     orch = bootstrap.read_env(home / "profiles" / "atlas-orchestrator" / ".env")
     assert estore.authenticate(orch["ATLAS_TOKEN_DASHBOARD"]).scopes == {"ops:read"}
-    ee = bootstrap.read_env(home / "profiles" / "execution-engineer" / ".env")
+    ee = bootstrap.read_env(home / "profiles" / "atlas-execution" / ".env")
     assert estore.authenticate(ee["ATLAS_TOKEN_OPERATIONS"]).scopes == {"ops:read"}
 
     # Re-running keeps valid tokens.
-    before = env_path.read_text(), (home / "profiles" / "operations-monitor" / ".env").read_text()
+    before = env_path.read_text(), (home / "profiles" / "atlas-operations" / ".env").read_text()
     issue()
-    assert (env_path.read_text(), (home / "profiles" / "operations-monitor" / ".env").read_text()) == before
+    assert (env_path.read_text(), (home / "profiles" / "atlas-operations" / ".env").read_text()) == before
     # A roster change in scopes reissues that token only.
-    roster = {**ROSTER, "risk-analyst": {**ROSTER["risk-analyst"], "mcp": {
-        **ROSTER["risk-analyst"]["mcp"], "atlas-backtest": ["run_backtest", "list_runs"]}}}
+    roster = {**ROSTER, "atlas-risk": {**ROSTER["atlas-risk"], "mcp": {
+        **ROSTER["atlas-risk"]["mcp"], "atlas-backtest": ["run_backtest", "list_runs"]}}}
     issue(roster)
     env2 = bootstrap.read_env(env_path)
     assert env2["ATLAS_TOKEN_BACKTEST"] != env["ATLAS_TOKEN_BACKTEST"]

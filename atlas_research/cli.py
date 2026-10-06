@@ -5,7 +5,9 @@
     atlas-research data quality  --symbols EURUSD GBPUSD
     atlas-research data import-mt5 --symbol EURUSD --file EURUSD_M1.csv
     atlas-research t0 run --all
+    atlas-research t0 check <name>
     atlas-research t1 run trend_pullback
+    atlas-research t2 run trend_pullback
     atlas-research prop-mc --trades research/runs/<run>/oos_trades.csv
     atlas-research prop-mc --reference breakeven
 """
@@ -28,6 +30,7 @@ from . import data as rdata
 from .registry import Registry
 
 DEFAULT_CONFIG = Path(__file__).parent / "configs" / "t0.yaml"
+DEFAULT_T2_CONFIG = Path(__file__).parent / "configs" / "t2.yaml"
 DEFAULT_REGISTRY = Path("research/experiments.jsonl")
 SYNTHETIC_MARKER = "SYNTHETIC"
 
@@ -97,8 +100,7 @@ def cmd_t0(args, cfg) -> None:
     registry_path = Path(args.registry)
     if (root / SYNTHETIC_MARKER).exists() and registry_path.resolve() == DEFAULT_REGISTRY.resolve():
         sys.exit("refusing to record synthetic-data runs in the real experiment registry; pass --registry")
-    holdout = cfg["segments"]["holdout_start"]
-    load = lambda sym, start, end: rdata.load_m1(root, sym, start, end, holdout)  # noqa: E731
+    load = lambda sym, start, end: rdata.load_research_m1(root, cfg, sym, start, end)  # noqa: E731
     names = list(cfg["strategies"]) if args.all else [args.strategy]
     for name in names:
         res = run_t0(name, cfg, load, Registry(registry_path), Path(args.out))
@@ -109,6 +111,27 @@ def cmd_t0(args, cfg) -> None:
             print("failed gates:\n  " + "\n  ".join(failed))
 
 
+def cmd_check(args, cfg) -> None:
+    from .check import run_check
+
+    root = Path(args.data_root or cfg["data"]["root"])
+    registry_path = Path(args.registry)
+    if (root / SYNTHETIC_MARKER).exists() and registry_path.resolve() == DEFAULT_REGISTRY.resolve():
+        sys.exit("refusing to record synthetic-data runs in the real experiment registry; pass --registry")
+    load = lambda sym, start, end: rdata.load_research_m1(root, cfg, sym, start, end)  # noqa: E731
+    res = run_check(args.check, cfg, load, Registry(registry_path), Path(args.out))
+    print(f"\n{res['experiment_id']}: {'PASS' if res['passed'] else 'FAIL'} (frozen {res['final_params']})")
+    for sym, rows in res["coverage"].items():
+        for c in rows:
+            print(f"  {sym} {c['year']}: {c['m1_bars']:>7,} M1 ({c['m1_frac']:.0%})  {c['h4_bars']:>5,} H4 ({c['h4_frac']:.0%})"
+                  f"  {'included' if c['included'] else 'EXCLUDED'}")
+    for y in res["years"]:
+        print(f"  {y['year']}: {y['trades']:>4} trades  {y['expectancy_r']:+.3f} R  win {y['win_rate']:.1%}  max DD {y['max_dd_r']:.1f} R")
+    for g in res["pass_rules"]:
+        print(f"  {'pass' if g['passed'] else 'FAIL'}  {g['gate']}: {g['value']:+.3f} ({g['rule']})")
+    print(json.dumps(res["kanban_metadata"], indent=2, default=str))
+
+
 def cmd_t1(args, cfg) -> None:
     from .t1 import run_t1
 
@@ -116,8 +139,7 @@ def cmd_t1(args, cfg) -> None:
     registry_path = Path(args.registry)
     if (root / SYNTHETIC_MARKER).exists() and registry_path.resolve() == DEFAULT_REGISTRY.resolve():
         sys.exit("refusing to record synthetic-data runs in the real experiment registry; pass --registry")
-    holdout = cfg["segments"]["holdout_start"]
-    load = lambda sym, start, end: rdata.load_m1(root, sym, start, end, holdout)  # noqa: E731
+    load = lambda sym, start, end: rdata.load_research_m1(root, cfg, sym, start, end)  # noqa: E731
     t1cfg = load_config(Path(args.t1_config))
     params = json.loads(args.params) if args.params else None
     names = list(cfg["strategies"]) if args.all else [args.strategy]
@@ -131,6 +153,21 @@ def cmd_t1(args, cfg) -> None:
                   f"  val {row['val_expectancy_r']:+.3f} R ({row['val_trades']})")
         if failed:
             print("failed gates:\n  " + "\n  ".join(failed))
+
+
+def cmd_t2(args, cfg) -> None:
+    from .t2 import run_t2
+
+    root = Path(args.data_root or cfg["data"]["root"])
+    registry_path = Path(args.registry)
+    if (root / SYNTHETIC_MARKER).exists() and registry_path.resolve() == DEFAULT_REGISTRY.resolve():
+        sys.exit("refusing to record synthetic-data runs in the real experiment registry; pass --registry")
+    load = lambda sym, start, end: rdata.load_research_m1(root, cfg, sym, start, end)  # noqa: E731
+    res = run_t2(args.strategy, cfg, load_config(Path(args.t2_config)), load, Registry(registry_path), Path(args.out))
+    print(f"\n{res['experiment_id']}: best arm {res['best_arm']} {'KEPT' if res['passed'] else 'not kept'}")
+    for arm, s in res["arms"].items():
+        print(f"  {arm:<12} trades {s['trades']:>5}  expectancy {s['expectancy_r']:+.3f} R  PF {s['profit_factor']:.2f}")
+    print(json.dumps(res["kanban_metadata"], indent=2, default=str))
 
 
 def cmd_prop_mc(args, cfg) -> None:
@@ -188,6 +225,12 @@ def main(argv: list[str] | None = None) -> None:
     r.add_argument("--registry", default=str(DEFAULT_REGISTRY))
     r.add_argument("--out", default="research/runs")
     r.set_defaults(fn=cmd_t0)
+    r = t.add_parser("check", help="one frozen-parameter run over a declared period (config `checks:`)")
+    r.add_argument("check")
+    r.add_argument("--data-root")
+    r.add_argument("--registry", default=str(DEFAULT_REGISTRY))
+    r.add_argument("--out", default="research/runs")
+    r.set_defaults(fn=cmd_check)
 
     t1 = sub.add_parser("t1", help="exit research: §18 exit variants vs the fixed 2R baseline").add_subparsers(dest="cmd", required=True)
     r = t1.add_parser("run")
@@ -199,6 +242,15 @@ def main(argv: list[str] | None = None) -> None:
     r.add_argument("--registry", default=str(DEFAULT_REGISTRY))
     r.add_argument("--out", default="research/runs")
     r.set_defaults(fn=cmd_t1)
+
+    t2 = sub.add_parser("t2").add_subparsers(dest="cmd", required=True)
+    r = t2.add_parser("run", help="selection layer keep/kill: rules-only vs rules + GBM")
+    r.add_argument("strategy")
+    r.add_argument("--t2-config", default=str(DEFAULT_T2_CONFIG))
+    r.add_argument("--data-root")
+    r.add_argument("--registry", default=str(DEFAULT_REGISTRY))
+    r.add_argument("--out", default="research/runs")
+    r.set_defaults(fn=cmd_t2)
 
     m = sub.add_parser("prop-mc", help="prop evaluation Monte Carlo through the risk engine (T3)")
     src = m.add_mutually_exclusive_group(required=True)

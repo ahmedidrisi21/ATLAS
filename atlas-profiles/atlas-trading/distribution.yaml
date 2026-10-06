@@ -1,0 +1,10 @@
+# ATLAS profile distribution. `description` is also this profile's Kanban routing
+# description: deploy/hermes/bootstrap.py applies it with `hermes profile describe`.
+name: atlas-trading
+version: 0.1.0
+description: 'Trades the ATLAS MT5 demo account itself: reads the live market and the news, decides trades with
+  a stop, target, confidence and written reason, manages its own positions, and keeps a scored record. Demo only.'
+hermes_requires: '>=0.21.4'
+author: ATLAS
+license: UNLICENSED
+env_requires: []

@@ -1,0 +1,29 @@
+# Example engine config for futures (docs/futures.md). Review and sign it into
+# config/ before use; agents never edit config (AGENTS.md).
+
+mode: evaluation
+phase: challenge
+prop_rules: prop_rules/fundednext_futures_flex_50k.yaml
+risk: risk.yaml
+
+account:
+  initial_balance: 50000
+  currency: USD
+
+# Product roots. Strategies, research and the journal use the root; the
+# adapter trades the contract pinned below.
+symbols: [MES]
+
+execution:
+  platform: ninjatrader
+  contracts: {MES: MESZ6}      # December 2026; pin the next contract before the roll window
+  roll_days: 5                 # no new entries within 5 days of last trade / first notice
+  entry_cutoff_min: 30         # no new entries 30 min before the firm's 15:10 CT flat-by time
+  flatten_lead_min: 10         # ATLAS closes its positions 10 min before it
+  require_watchdog: false      # the MT5 watchdog EA has no NinjaTrader equivalent; the firm auto-liquidates at its limit
+  broker_poll_s: 5
+  # commission_per_lot: {MES: <round turn per contract, USD>}  # set once the account's fees are known
+  # no_trade_days: ["2026-11-27"]  # extra exchange no-trade days on top of the built-in holiday rules
+
+filters:
+  friday_flatten_utc: null     # the daily flat-by time already closes everything before the weekend

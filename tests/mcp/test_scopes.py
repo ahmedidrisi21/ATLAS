@@ -67,7 +67,7 @@ def test_unknown_route_and_bad_arguments(service, tokens):
 
 
 def test_backtest_read_token_cannot_spend_budget(service, tokens, run_id):
-    """risk-analyst gets backtest:read: it can inspect runs and Monte Carlo, never start one."""
+    """atlas-risk gets backtest:read: it can inspect runs and Monte Carlo, never start one."""
     tok = token_for(["backtest:read"])
     assert dispatch(service, tokens, "backtest/monte_carlo", tok, {"run_id": run_id, "sims": 200})[0] == 200
     before = len(service.registry.entries())
@@ -85,16 +85,16 @@ def test_principal_require():
 
 def test_token_file_stores_only_hashes(tmp_path):
     path = tmp_path / "tokens.yaml"
-    tok = issue(path, "risk-analyst/atlas-backtest", ["backtest:read"])
+    tok = issue(path, "atlas-risk/atlas-backtest", ["backtest:read"])
     text = path.read_text()
     assert tok not in text and hash_token(tok) in text
     assert oct(path.stat().st_mode & 0o777) == "0o600"
     store = TokenStore.load(path)
     assert store.authenticate(tok).scopes == frozenset({"backtest:read"})
     # Re-issuing under the same name revokes the old token.
-    tok2 = issue(path, "risk-analyst/atlas-backtest", ["backtest:read"])
+    tok2 = issue(path, "atlas-risk/atlas-backtest", ["backtest:read"])
     store = TokenStore.load(path)
-    assert store.authenticate(tok2).name == "risk-analyst/atlas-backtest"
+    assert store.authenticate(tok2).name == "atlas-risk/atlas-backtest"
     with pytest.raises(PermissionError):
         store.authenticate(tok)
 

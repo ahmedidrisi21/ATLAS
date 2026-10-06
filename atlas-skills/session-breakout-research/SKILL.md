@@ -22,7 +22,7 @@ Test whether the first break of the Asian range around the London open continues
 - A card asks for a session-breakout hypothesis, parameter test or robustness check.
 - A card asks whether momentum or retest entries work better.
 
-Don't use for: other setups, exit-rule changes (T1), or code changes (create a backtest-engineer card).
+Don't use for: other setups, exit-rule changes (T1), or code changes (create a atlas-backtest card).
 
 ## Required inputs
 

@@ -7,7 +7,7 @@ from atlas_api.http import dispatch
 
 from conftest import token_for
 
-ALL = Principal("risk-analyst/atlas-backtest", frozenset(SCOPES))
+ALL = Principal("atlas-risk/atlas-backtest", frozenset(SCOPES))
 TOK = token_for(sorted(SCOPES))
 Q4 = {"start": "2020-10-01", "end": "2021-01-01"}
 

@@ -58,3 +58,47 @@ is run on other years and the result is reported as a fail.
 - Mean-reversion ideas have been weak in this project (the forex fix
   reversal; the Nasdaq RSI(2) dip-buy had 16 trades), so a fail is the more
   likely outcome. It is reported all the same, in R after costs.
+
+# Result (run 2026-10-07, `mnq_range_fade_m5-20261007-161817-9535f1`)
+
+Run exactly as declared. **FAIL: 16 of 17 gates failed** (only the
+daily-loss gate passed). No 2018 check was run, as declared.
+
+| After MNQ costs | Value |
+|---|---|
+| Out-of-sample trades (dev walk-forward + validation) | 224 (gate: 300) |
+| Average R after costs | **−0.085** (dev −0.093, validation −0.045) |
+| Average R before costs | −0.073 |
+| Profit factor | 0.83 (dev 0.81, validation 0.92) |
+| Win rate | 41% (average win +0.98 R, average loss −0.83 R) |
+| Net points per trade | −8.7 (median 1R: 76 points) |
+| At 2.0 pt Stress cost | −0.088 R |
+| Random-entry p95 / random-direction p95 | +0.053 R / +0.105 R |
+| Exits | 96 stopped, 52 hit the 1.5R target, 76 closed at 16:00 |
+
+All four grid points lost on the dev period, even before costs
+(average R, dev): edge 0.1 / all days −0.164 (−0.146 before costs, 187
+trades); edge 0.1 / calm days −0.153 (−0.129, 90); edge 0.2 / all days
+−0.139 (−0.124, 262); edge 0.2 / calm days −0.132 (−0.111, 130). On
+validation they were −0.070, −0.174, +0.009 and −0.045 R. The walk-forward
+mostly chose edge 0.2 with the calm filter.
+
+By calendar year (average R, trades): 2020 +0.126 (37), 2021 −0.273 (45),
+2022 −0.259 (59), 2023 +0.126 (45), 2024 −0.125 (26), 2025 H1 +0.127 (12).
+Buys at the bottom of the range averaged −0.164 R (123 trades); sells at
+the top averaged +0.012 R (101).
+
+## What this says
+
+- **The idea has no edge on Nasdaq in this reading, and costs are not the
+  reason.** Costs were only 0.01 R a trade here (the stops are wide, 76
+  points). The strategy loses before costs, so no cost saving would fix it.
+- **The calm-day filter did not help.** It cut trades roughly in half and
+  left every grid point negative.
+- **Buying support is what lost.** The page's warning that "ranges
+  eventually break" fits: in a rising market the lows of yesterday's range
+  broke often, and the stop (0.25 × the range) was hit more than the
+  1.5R target (96 stops against 52 targets).
+- A fail here says this reading failed. A different definition of the range
+  (an opening range, a rolling channel) would be a different declared round.
+  Nothing in this result suggests one would do better.

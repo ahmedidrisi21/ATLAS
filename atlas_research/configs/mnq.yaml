@@ -199,6 +199,28 @@ strategies:
     # early closes skipped; entries are exactly round 1's signals (a stopped-out trade is not re-entered
     # until the setup is flat again and a new breakout fires).
 
+  # MNQ round 3 (declared 2026-10-07, before any range-fade run; docs/mnq-range-fade.md). The Wealthsimple
+  # futures-strategies page's "range trading", pinned down: fade the edges of the prior regular session's
+  # range, RSI(14) as confirmation, stop beyond the range, target 1.5R (about the middle), flat at 16:00.
+  # The page leaves "range" undefined; this is the declared reading. Grid of 4 deflated-Sharpe trials.
+  mnq_range_fade_m5:
+    setup: range_fade
+    bar: 5min
+    dsr_pool: [rsi2_pullback]          # both are RSI-confirmed mean reversion
+    hypothesis: "Wealthsimple futures-strategies page, range trading: buying the bottom edge of the prior session's range when RSI(14) < 30 and selling the top edge when RSI > 70, with a stop 0.25 x the range beyond the edge and a 1.5R target, pays >= +0.10 R and PF >= 1.25 after MNQ costs, and may do better after calm sessions."
+    symbols: [MNQ]
+    exits:
+      rr: 1.5
+      friday_flatten_utc: null        # time exit at 16:00 New York from the setup
+    filters:
+      friday_no_entry_after_utc: null
+    grid:
+      edge: [0.1, 0.2]                # entry zone: bottom/top 10% or 20% of the prior range
+      calm: [0, 1]                    # 1 = only after a prior range at or under the 20-session median
+    # fixed: RSI(14) on 5-minute closes, < 30 long / > 70 short; entries at 5-minute closes 10:00-15:00 New York;
+    # first qualifying entry per day; a close outside the range never enters; stop 0.25 x W beyond the edge,
+    # at least 4.0 pt from entry; holidays and early closes skipped.
+
 # Information only (review #1): too few trades for the 300-trade gate, so it is
 # reported against buy-and-hold on return, drawdown and Sharpe and logged as
 # kind: information. `atlas-research t0 info mnq_trend_filter_d1`.

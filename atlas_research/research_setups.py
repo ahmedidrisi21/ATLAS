@@ -283,10 +283,70 @@ def rsi2_pullback(f: pd.DataFrame, p: dict) -> pd.DataFrame:
     return out
 
 
+# --- range fade (Wealthsimple futures-strategies page, "range trading") -------
+
+RANGE_DEFAULTS = {"edge": 0.1, "calm": 1, "rsi_len": 14, "rsi_low": 30.0, "rsi_high": 70.0, "stop_w": 0.25, "min_stop_pts": 4.0,
+                  "first_entry": "10:00", "last_entry": "15:00", "exit_at": "16:00", "calm_lookback": 20}
+
+
+def range_fade(f: pd.DataFrame, p: dict) -> pd.DataFrame:
+    """Fade the edges of the prior regular session's range (declared in docs/mnq-range-fade.md).
+
+    The range is the prior RTH session's high and low (W = high - low). On the
+    decision bars closing between ``first_entry`` and ``last_entry`` New York, a
+    close inside the bottom ``edge`` x W of the range with RSI below ``rsi_low``
+    goes long, a close inside the top ``edge`` x W with RSI above ``rsi_high``
+    goes short; one entry per day, the first to qualify. A close outside the
+    range is a break, not a fade, and never enters. The stop is ``stop_w`` x W
+    beyond the range edge (at least ``min_stop_pts`` from the entry close);
+    everything is flat at ``exit_at``. With ``calm`` = 1 only days after a
+    prior-session range at or under the median of the 20 sessions before it
+    trade. Only information known at the decision bar is used.
+    """
+    idx = pd.DatetimeIndex(f.index)
+    bar_min = int((pd.DatetimeIndex(f["close_time"]) - idx)[0].total_seconds() // 60) if len(f) else 5
+    open_min = pd.Series(sessions.local_minutes(idx, sessions.NEW_YORK), index=f.index)
+    date = pd.Series(np.asarray(sessions.local_date(idx, sessions.NEW_YORK)), index=f.index)
+    close_min = open_min + bar_min
+    rth = (open_min >= RTH_OPEN) & (close_min <= RTH_CLOSE)
+    ok_day = pd.Series(trading_day(date), index=f.index, dtype=bool)
+    ses = f.loc[rth & ok_day].groupby(date[rth & ok_day]).agg(hi=("high", "max"), lo=("low", "min"))
+    if len(ses) < int(p["calm_lookback"]) + 2:
+        return _empty()
+    ses["w"] = ses["hi"] - ses["lo"]
+    prev = ses.shift(1)
+    med = ses["w"].shift(1).rolling(int(p["calm_lookback"])).median()
+    calm = (prev["w"] <= med) if int(p["calm"]) else pd.Series(True, index=ses.index)
+    r = rsi(f["close"], int(p["rsi_len"]))
+    first, last = sessions._hhmm(p["first_entry"]), sessions._hhmm(p["last_entry"])
+    window = rth & ok_day & (close_min >= first) & (close_min <= last)
+    hi, lo, w = (date.map(prev["hi"]), date.map(prev["lo"]), date.map(prev["w"]))
+    use = date.map(calm).fillna(False).astype(bool) & w.notna() & (w > 0)
+    c, e = f["close"], float(p["edge"])
+    long_ok = window & use & (c >= lo) & (c <= lo + e * w) & (r < float(p["rsi_low"]))
+    short_ok = window & use & (c <= hi) & (c >= hi - e * w) & (r > float(p["rsi_high"]))
+    m = float(p["min_stop_pts"])
+    stop_long, stop_short = lo - float(p["stop_w"]) * w, hi + float(p["stop_w"]) * w
+    long_ok &= (c - stop_long) >= m
+    short_ok &= (stop_short - c) >= m
+    hit = long_ok | short_ok
+    first_hit = hit & (hit.astype(int).groupby(date).cumsum() == 1)
+    rows = f.loc[first_hit]
+    if rows.empty:
+        return _empty()
+    d = np.where(long_ok.loc[first_hit], 1, -1)
+    stop = np.where(d == 1, stop_long.loc[first_hit], stop_short.loc[first_hit])
+    out = pd.DataFrame({"decision_time": rows["close_time"].to_numpy(), "direction": d, "stop": stop,
+                        "atr": rows["atr"].to_numpy(), "spread": rows["spread"].to_numpy(),
+                        "exit_by": pd.DatetimeIndex(ny_time(date.loc[first_hit], p["exit_at"])).as_unit("ns")})
+    return out
+
+
 LATE_DAY_MOMENTUM = Setup("late_day_momentum", "0.1.0", late_day_momentum, LATE_DAY_DEFAULTS, session_based=True)
 NOISE_AREA = Setup("noise_area", "0.2.0", noise_area, NOISE_DEFAULTS, session_based=True)
 OPENING_CANDLE = Setup("opening_candle", "0.1.0", opening_candle, CANDLE_DEFAULTS, session_based=True)
 RSI2_PULLBACK = Setup("rsi2_pullback", "0.1.0", rsi2_pullback, RSI2_DEFAULTS, session_based=True)
+RANGE_FADE = Setup("range_fade", "0.1.0", range_fade, RANGE_DEFAULTS, session_based=True)
 
-RESEARCH_SETUPS: dict[str, Setup] = {s.name: s for s in (LATE_DAY_MOMENTUM, NOISE_AREA, OPENING_CANDLE, RSI2_PULLBACK)}
+RESEARCH_SETUPS: dict[str, Setup] = {s.name: s for s in (LATE_DAY_MOMENTUM, NOISE_AREA, OPENING_CANDLE, RSI2_PULLBACK, RANGE_FADE)}
 ALL_SETUPS: dict[str, Setup] = {**SETUPS, **RESEARCH_SETUPS}

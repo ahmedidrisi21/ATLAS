@@ -79,7 +79,7 @@ def test_kill_flattens_and_disables(engine):
 
 
 def test_disable_is_idempotent_and_keeps_the_first_reason(engine):
-    first = engine.disable_trading("operations-monitor/atlas-operations", "MT5 dropped at 14:00")
+    first = engine.disable_trading("atlas-operations/atlas-operations", "MT5 dropped at 14:00")
     again = engine.disable_trading("someone-else", "second reason")
     assert not first["already_disabled"] and again["already_disabled"]
     assert again["trading"]["reason"] == "MT5 dropped at 14:00"

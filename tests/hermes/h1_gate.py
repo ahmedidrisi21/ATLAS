@@ -10,8 +10,8 @@ Two modes:
 
   offline (default)  Every profile talks to a scripted OpenAI-compatible endpoint
                      started by this script, so no model key is needed. The
-                     decomposer's answer is scripted (market-researcher ->
-                     strategy-researcher -> risk-analyst), so this mode proves the
+                     decomposer's answer is scripted (atlas-market ->
+                     atlas-research -> atlas-risk), so this mode proves the
                      Hermes wiring, not routing judgment: profiles install from
                      the distributions, the roster and descriptions reach the
                      decomposer, each worker runs under its own profile with its
@@ -49,7 +49,7 @@ REPO = Path(__file__).resolve().parents[2]
 ROSTER = yaml.safe_load((REPO / "atlas-profiles" / "roster.yaml").read_text())["profiles"]
 MANAGED = yaml.safe_load((REPO / "deploy" / "hermes" / "managed" / "config.yaml").read_text())
 BOARD = "atlas-research"
-ROUTE = ["market-researcher", "strategy-researcher", "risk-analyst"]
+ROUTE = ["atlas-market", "atlas-research", "atlas-risk"]
 CARD_TITLE = "H1 routing drill: EURUSD London trend-pullback idea"
 CARD_BODY = (
     "Routing drill for the H1 exit gate. Do not do real research, run tools other than "
@@ -309,7 +309,7 @@ def check(run: Run, root: str, model: ScriptedModel | None) -> list[tuple[str, b
 
     prompt = model.decomposer_prompts[0] if model.decomposer_prompts else ""
     missing = [p for p in ROSTER if p not in prompt]
-    ok("decomposer saw all 10 ATLAS profiles", not missing, "missing: " + ", ".join(missing) if missing else "")
+    ok(f"decomposer saw all {len(ROSTER)} ATLAS profiles", not missing, "missing: " + ", ".join(missing) if missing else "")
     desc_missing = [p for p in ROSTER
                     if yaml.safe_load((REPO / "atlas-profiles" / p / "distribution.yaml").read_text())
                     ["description"][:40] not in prompt]
@@ -332,10 +332,10 @@ def check(run: Run, root: str, model: ScriptedModel | None) -> list[tuple[str, b
     def show_of(profile: str) -> str:
         return next((t["show_result"] for t in model.worker_turns if t["profile"] == profile), "")
 
-    ok("strategy-researcher received market-researcher's handoff",
-       "market-researcher: drill step done" in show_of("strategy-researcher"))
-    ok("risk-analyst received strategy-researcher's handoff",
-       "strategy-researcher: drill step done" in show_of("risk-analyst"))
+    ok("atlas-research received atlas-market's handoff",
+       "atlas-market: drill step done" in show_of("atlas-research"))
+    ok("atlas-risk received atlas-research's handoff",
+       "atlas-research: drill step done" in show_of("atlas-risk"))
     return results
 
 

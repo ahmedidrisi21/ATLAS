@@ -1,0 +1,1 @@
+{"mfa":{"totpEnabled":false,"hasWebAuthn":false},"identity":{"name":"USER_NAME","email":"USER_EMAIL"},"accounts":[{"name":"DEMO_ACCOUNT_1","active":true}],"tradovateSubscription":{"plan":"TRIAL_MONTH","startDate":"2026-10-05","expirationDate":"2026-10-20"},"addOns":[{"name":"ntEvaluation","startDate":"2026-10-05","expirationDate":"2100-01-01","autoRenewal":false}]}

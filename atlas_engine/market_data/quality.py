@@ -1,4 +1,4 @@
-"""Data-quality checks for M1 bid/ask frames (owned by the data-engineer role)."""
+"""Data-quality checks for M1 bid/ask frames (owned by the atlas-data role)."""
 
 from __future__ import annotations
 

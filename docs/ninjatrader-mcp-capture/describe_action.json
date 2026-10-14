@@ -1,0 +1,1 @@
+{"topic":"action","kind":"enum","values":[{"name":"Buy","description":"Buy / long side."},{"name":"Sell","description":"Sell / short side."}],"description":"Trade direction — Buy or Sell. Also known as 'order side'."}

@@ -33,7 +33,8 @@ def call(service, tokens, route, token, args=None):
 
 def test_contract():
     assert set(ROUTE_SCOPE) == set(OPS_ROUTES)
-    assert set(ENGINE_SCOPES) == {"ops:read", "ops:disable_trading"}
+    # trading:* belongs to the real engine's trading routes (atlas_api/trading.py), not to these.
+    assert set(ENGINE_SCOPES) == {"ops:read", "ops:disable_trading", "trading:read", "trading:demo"}
     # The only write scope stops trading; nothing can enable, flatten, clear a kill or change a limit.
     for route in OPS_ROUTES:
         assert not any(w in route for w in ("enable_trading", "flatten", "kill", "risk", "limit", "order"))
@@ -66,8 +67,8 @@ def test_unknown_tokens_are_401(service, engine_tokens, token):
 def test_research_tokens_do_not_work_here(service, tmp_path):
     """Separate token files: a research token with every research scope is unknown to the engine."""
     research, eng = tmp_path / "api-tokens.yaml", tmp_path / "engine-tokens.yaml"
-    rtok = issue(research, "risk-analyst/atlas-backtest", sorted(SCOPES))
-    etok = issue(eng, "operations-monitor/atlas-operations", ["ops:read"], known=ENGINE_SCOPES)
+    rtok = issue(research, "atlas-risk/atlas-backtest", sorted(SCOPES))
+    etok = issue(eng, "atlas-operations/atlas-operations", ["ops:read"], known=ENGINE_SCOPES)
     assert call(service, TokenStore.load(eng, ENGINE_SCOPES), "operations/status", rtok)[0] == 401
     assert call(service, TokenStore.load(eng, ENGINE_SCOPES), "operations/status", etok)[0] == 200
     with pytest.raises(ValueError, match="unknown scope"):
@@ -116,8 +117,8 @@ def test_principal_helper(service):
 
 @pytest.fixture()
 def api(engine):
-    grants = {"operations-monitor/atlas-operations": ["ops:read", "ops:disable_trading"],
-              "execution-engineer/atlas-operations": ["ops:read"]}
+    grants = {"atlas-operations/atlas-operations": ["ops:read", "ops:disable_trading"],
+              "atlas-execution/atlas-operations": ["ops:read"]}
     tokens = TokenStore([{"name": n, "sha256": hash_token("t-" + n), "scopes": s} for n, s in grants.items()],
                         ENGINE_SCOPES)
     httpd = make_server(OpsService(engine), tokens, "127.0.0.1", 0, routes=OPS_ROUTES)
@@ -147,8 +148,8 @@ def test_operations_server_routes_match_scopes():
 
 
 def test_incident_flow_through_mcp(api, engine):
-    monitor = SERVERS["atlas-operations"](api("operations-monitor/atlas-operations"))
-    engineer = SERVERS["atlas-operations"](api("execution-engineer/atlas-operations"))
+    monitor = SERVERS["atlas-operations"](api("atlas-operations/atlas-operations"))
+    engineer = SERVERS["atlas-operations"](api("atlas-execution/atlas-operations"))
     engine.inject("mt5_disconnect")
 
     err, text = asyncio.run(_call(monitor, "health_state", {}))
@@ -156,7 +157,7 @@ def test_incident_flow_through_mcp(api, engine):
     err, text = asyncio.run(_call(engineer, "reconciliation_report", {}))
     assert not err and json.loads(text)["status"] == "clean"
 
-    # execution-engineer's token reads but cannot disable, even if it were offered the tool.
+    # atlas-execution's token reads but cannot disable, even if it were offered the tool.
     err, text = asyncio.run(_call(engineer, "disable_trading", {"reason": "not mine to do, drill"}))
     assert err and "refused (forbidden)" in text and "ops:disable_trading" in text
     assert engine.status()["trading"]["enabled"]
@@ -164,7 +165,7 @@ def test_incident_flow_through_mcp(api, engine):
     err, text = asyncio.run(_call(monitor, "disable_trading", {"reason": "HALT: mt5_disconnected for 90 s (drill)"}))
     assert not err and json.loads(text)["trading_enabled"] is False
     s = engine.status()
-    assert s["trading"]["by"] == "operations-monitor/atlas-operations" and not any(s["new_trades_allowed"].values())
+    assert s["trading"]["by"] == "atlas-operations/atlas-operations" and not any(s["new_trades_allowed"].values())
 
     err, text = asyncio.run(_call(monitor, "disable_trading", {"reason": "short"}))
     assert err and "refused (bad_request)" in text

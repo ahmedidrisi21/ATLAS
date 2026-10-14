@@ -143,7 +143,7 @@ def main(argv: list[str] | None = None) -> None:
     s.add_argument("--port", type=int, default=8741)
 
     t = sub.add_parser("token", help="issue a token; prints it once")
-    t.add_argument("--name", required=True, help="e.g. risk-analyst/atlas-backtest")
+    t.add_argument("--name", required=True, help="e.g. atlas-risk/atlas-backtest")
     t.add_argument("--scopes", required=True, help="comma-separated: " + ", ".join(auth.SCOPES))
 
     args = ap.parse_args(argv)

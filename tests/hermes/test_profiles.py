@@ -16,16 +16,16 @@ ROSTER = yaml.safe_load((PROFILES / "roster.yaml").read_text())["profiles"]
 MANAGED = yaml.safe_load((DEPLOY / "managed" / "config.yaml").read_text())
 NAMES = sorted(ROSTER)
 
-# PRD §3: the ten specialist profiles.
-PRD_PROFILES = {
-    "atlas-orchestrator", "market-researcher", "strategy-researcher", "backtest-engineer",
-    "risk-analyst", "execution-engineer", "performance-analyst", "data-engineer",
-    "jev-analyst", "operations-monitor",
+# PRD v3 §4-§5: the seven personas and the orchestrator, plus four supporting roles kept from the first roster.
+V3_PERSONAS = {
+    "atlas-market", "atlas-research", "atlas-backtest", "atlas-journal", "atlas-performance", "atlas-operations",
+    "atlas-trading",
 }
+PRD_PROFILES = V3_PERSONAS | {"atlas-orchestrator", "atlas-risk", "atlas-execution", "atlas-data", "atlas-models"}
 # PRD §11: only engineering roles get a shell and file writes.
-ENGINEERING = {"backtest-engineer", "execution-engineer", "data-engineer"}
+ENGINEERING = {"atlas-backtest", "atlas-execution", "atlas-data"}
 # PRD §9: the four ATLAS bots.
-BOTS = {"atlas-orchestrator", "risk-analyst", "operations-monitor", "performance-analyst"}
+BOTS = {"atlas-orchestrator", "atlas-risk", "atlas-operations", "atlas-performance"}
 
 
 def load(name: str, file: str) -> dict:
@@ -34,6 +34,10 @@ def load(name: str, file: str) -> dict:
 
 def test_roster_matches_prd():
     assert set(ROSTER) == PRD_PROFILES
+
+
+def test_every_profile_is_an_atlas_persona():
+    assert all(n.startswith("atlas-") for n in ROSTER)
 
 
 def test_bots_match_prd():
@@ -109,7 +113,7 @@ def test_orchestrator_cannot_do_the_work_itself():
 
 
 def test_operations_monitor_is_read_only():
-    assert not set(ROSTER["operations-monitor"]["toolsets"]) & {"terminal", "file", "code_execution", "web"}
+    assert not set(ROSTER["atlas-operations"]["toolsets"]) & {"terminal", "file", "code_execution", "web"}
 
 
 @pytest.mark.parametrize("name", NAMES)

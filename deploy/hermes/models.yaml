@@ -16,3 +16,14 @@ tiers:
   cheap:
     provider: anthropic
     model: claude-haiku-4-5-20251001
+
+# Per-persona override (PRD v3 §6): any profile in atlas-profiles/roster.yaml may name its own
+# provider and model, which wins over its tier. Any provider Hermes supports works here
+# (anthropic, openai, gemini, qwen, deepseek, kimi, or custom with base_url for local models).
+# Example:
+#   profiles:
+#     atlas-research:
+#       provider: custom
+#       model: qwen3-coder
+#       base_url: http://127.0.0.1:8000/v1
+profiles: {}

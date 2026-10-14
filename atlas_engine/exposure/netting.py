@@ -3,7 +3,9 @@
 A long EURUSD that risks 0.4% to its stop is +0.4% EUR and -0.4% USD; the
 net per currency is capped. XAUUSD splits into a gold bucket (XAU) and a USD
 leg. Pairs whose direction-adjusted 60-day correlation is above the
-threshold count as one bet.
+threshold count as one bet. A futures position has one leg, its asset group
+(``us_equity_index``, ``energy``, ``metals``), so long ES and long NQ are one
+equity-index bet.
 """
 
 from __future__ import annotations
@@ -27,6 +29,10 @@ class Exposure:
 
 def legs(e: Exposure) -> dict[str, float]:
     spec = contract(e.symbol)
+    if spec.asset_class == "future":
+        # A USD-settled future on a USD account carries no currency leg: its one leg is its asset group
+        # (ES, NQ, MES... all load us_equity_index), so same-group trades add up and count as one bet.
+        return {spec.base: e.direction * e.risk_pct}
     return {spec.base: e.direction * e.risk_pct, spec.quote: -e.direction * e.risk_pct}
 
 

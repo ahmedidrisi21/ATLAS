@@ -17,12 +17,18 @@ EXPECTED_TOOLS = {
     "atlas-journal": {"query_trades", "mfe_mae", "loss_clusters"},
     "atlas-performance": {"performance_summary"},
     "atlas-operations": {"system_status", "health_state", "reconciliation_report", "disable_trading"},
+    "atlas-trading": {"get_live_market", "submit_trade_intent", "get_intent_status", "list_my_positions",
+                      "close_my_position", "tighten_stop", "my_track_record"},
 }
 
 # PRD §6: none of these exists on any MCP server. flatten_all belongs to the
-# operator-only atlas-emergency server; submit_trade_intent to atlas-trading (T7).
+# operator-only atlas-emergency server. atlas-trading closes only the agent's own
+# positions (close_my_position), never any position.
 FORBIDDEN = {"send_raw_order", "modify_risk", "enable_trading", "access_holdout", "flatten_all",
-             "submit_trade_intent", "set_risk", "close_position", "place_order", "clear_kill", "reenable_trading"}
+             "set_risk", "close_position", "place_order", "clear_kill", "reenable_trading", "set_volume",
+             "set_lots", "enable_live", "go_live"}
+# Agent trading (demo only) exists on atlas-trading only.
+ONLY_ON_TRADING = {"submit_trade_intent", "close_my_position", "tighten_stop"}
 # The one safe write (PRD §6, §23) exists on atlas-operations only.
 ONLY_ON_OPERATIONS = {"disable_trading"}
 
@@ -56,6 +62,8 @@ def test_tool_surface(name):
         assert tool.description
         if name != "atlas-operations":
             assert tool_name not in ONLY_ON_OPERATIONS
+        if name != "atlas-trading":
+            assert tool_name not in ONLY_ON_TRADING
 
 
 def test_no_server_has_a_forbidden_tool():
@@ -74,7 +82,9 @@ def test_servers_only_forward_to_their_own_routes():
         for tool, t in tools.items():
             required = t.input_schema.get("required", [])
             args = {k: {"symbol": "EURUSD", "symbols": ["EURUSD"], "timeframe": "H1", "window": "dev",
-                        "strategy": "trend_pullback", "run_id": "r", "reason": "drill reason text"}[k]
+                        "strategy": "trend_pullback", "run_id": "r", "reason": "drill reason text",
+                        "intent_id": "i-0001", "direction": "buy", "stop": 1.1, "target": 1.2, "confidence": 0.5,
+                        "thesis": "x" * 40, "ticket": 1, "new_stop": 1.15}[k]
                     for k in required}
             err, text = _run(_call(server, tool, args))
             assert not err, (tool, text)
@@ -88,10 +98,10 @@ def test_servers_only_forward_to_their_own_routes():
 def api(service, tmp_path):
     """The real HTTP API on a free port, with one token per (profile, server) like bootstrap issues."""
     grants = {
-        "strategy-researcher/atlas-backtest": ["backtest:run", "backtest:read"],
-        "risk-analyst/atlas-backtest": ["backtest:read"],
-        "risk-analyst/atlas-journal": ["journal:read"],
-        "market-researcher/atlas-market": ["market:read"],
+        "atlas-research/atlas-backtest": ["backtest:run", "backtest:read"],
+        "atlas-risk/atlas-backtest": ["backtest:read"],
+        "atlas-risk/atlas-journal": ["journal:read"],
+        "atlas-market/atlas-market": ["market:read"],
     }
     tokens = TokenStore([{"name": n, "sha256": hash_token("t-" + n), "scopes": s} for n, s in grants.items()])
     httpd = make_server(service, tokens, "127.0.0.1", 0)
@@ -103,40 +113,40 @@ def api(service, tmp_path):
 
 
 def test_end_to_end_research_flow(api):
-    researcher = SERVERS["atlas-backtest"](api("strategy-researcher/atlas-backtest"))
+    researcher = SERVERS["atlas-backtest"](api("atlas-research/atlas-backtest"))
     err, text = _run(_call(researcher, "run_backtest", {"strategy": "session_breakout", "window": "validation"}))
     assert not err, text
     run_id = json.loads(text)["run_id"]
 
-    risk = SERVERS["atlas-backtest"](api("risk-analyst/atlas-backtest"))
+    risk = SERVERS["atlas-backtest"](api("atlas-risk/atlas-backtest"))
     err, text = _run(_call(risk, "monte_carlo", {"run_id": run_id, "sims": 500}))
     assert not err, text
     assert "dd_p95_pct" in json.loads(text)
     err, text = _run(_call(risk, "list_runs", {}))
     assert not err and run_id in text
 
-    journal = SERVERS["atlas-journal"](api("risk-analyst/atlas-journal"))
+    journal = SERVERS["atlas-journal"](api("atlas-risk/atlas-journal"))
     err, text = _run(_call(journal, "mfe_mae", {"run_id": run_id, "group_by": "session"}))
     assert not err, text
 
 
 def test_scope_refusal_reaches_the_agent_as_a_tool_error(api):
-    risk = SERVERS["atlas-backtest"](api("risk-analyst/atlas-backtest"))
+    risk = SERVERS["atlas-backtest"](api("atlas-risk/atlas-backtest"))
     err, text = _run(_call(risk, "run_backtest", {"strategy": "trend_pullback"}))
     assert err and "refused (forbidden)" in text and "backtest:run" in text
 
     # A token lifted from one server is still limited to its own scopes elsewhere.
-    wrong = SERVERS["atlas-market"](api("risk-analyst/atlas-journal"))
+    wrong = SERVERS["atlas-market"](api("atlas-risk/atlas-journal"))
     err, text = _run(_call(wrong, "get_bars", {"symbol": "EURUSD", "timeframe": "H1", "window": "dev"}))
     assert err and "refused (forbidden)" in text
 
 
 @pytest.mark.parametrize("window", ["holdout", {"start": "2020-12-01", "end": "2021-02-01"}], ids=str)
 def test_holdout_refusal_reaches_the_agent_as_a_tool_error(api, loader, window):
-    market = SERVERS["atlas-market"](api("market-researcher/atlas-market"))
+    market = SERVERS["atlas-market"](api("atlas-market/atlas-market"))
     err, text = _run(_call(market, "get_bars", {"symbol": "EURUSD", "timeframe": "H1", "window": window}))
     assert err and "refused (holdout_refused)" in text
-    backtest = SERVERS["atlas-backtest"](api("strategy-researcher/atlas-backtest"))
+    backtest = SERVERS["atlas-backtest"](api("atlas-research/atlas-backtest"))
     err, text = _run(_call(backtest, "run_backtest", {"strategy": "trend_pullback", "window": window}))
     assert err and "refused (holdout_refused)" in text
     assert loader.calls == []

@@ -22,7 +22,7 @@ Test whether M15 pullbacks into the fast EMA resume the H1 trend often enough to
 - A card asks for a trend-pullback hypothesis, parameter test or robustness check.
 - A previous trend-pullback run failed a gate and the card asks why or what to try next.
 
-Don't use for: other setups, exit-rule changes (T1 work), or code changes to the setup (create a backtest-engineer card).
+Don't use for: other setups, exit-rule changes (T1 work), or code changes to the setup (create a atlas-backtest card).
 
 ## Required inputs
 

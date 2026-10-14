@@ -8,7 +8,7 @@ printed = a silent tick) and delivers an error alert if the script fails.
 - ``health-check`` (every 15 min): engine health and status. Alerts on every
   change of state, reminds while an incident stays open, and for HALT, KILL or
   an unreachable engine opens an atlas-ops incident card for
-  operations-monitor. That card is where a model gets involved: "LLM only on
+  atlas-operations. That card is where a model gets involved: "LLM only on
   anomaly".
 - ``alert-relay`` (every minute): delivers alerts raised by the hooks and the
   token-budget check.
@@ -54,7 +54,7 @@ class OpsClient:
         self.token = token if token is not None else os.environ.get("ATLAS_TOKEN_OPS_CRON", "")
         if not self.url or not self.token:
             raise SystemExit("ATLAS_ENGINE_URL and ATLAS_TOKEN_OPS_CRON must be set "
-                             "(operations-monitor .env, passed through by terminal.env_passthrough)")
+                             "(atlas-operations .env, passed through by terminal.env_passthrough)")
         self.timeout = timeout
 
     def __call__(self, route: str, **args) -> dict:
@@ -162,11 +162,11 @@ def health_check(client: Callable[..., dict], now: dt.datetime | None = None,
                 digest = hashlib.sha1(key.encode()).hexdigest()[:8]
                 tenant = (cfg.get("tenants") or {}).get((status or {}).get("mode"))
                 card = create_card(
-                    OPS_BOARD, f"Incident: engine {state} ({', '.join(reasons)[:80]})", "operations-monitor",
+                    OPS_BOARD, f"Incident: engine {state} ({', '.join(reasons)[:80]})", "atlas-operations",
                     _incident_body(state, reasons, status, detail, store.iso(now)),
                     key=f"incident-{now:%Y-%m-%d}-{digest}", tenant=tenant, skills=("incident-triage",),
-                    created_by="operations-monitor/health-check")
-                lines.append(f"Incident card {card} opened on atlas-ops for operations-monitor.")
+                    created_by="atlas-operations/health-check")
+                lines.append(f"Incident card {card} opened on atlas-ops for atlas-operations.")
         st.update(key=key, state=state, reasons=reasons, alerted_at=store.iso(now))
     elif state != "NORMAL":
         last = dt.datetime.fromisoformat(st.get("alerted_at") or store.iso(now))
@@ -276,6 +276,8 @@ def reconciliation_report(client: Callable[..., dict], now: dt.datetime | None =
 
 
 def period_of(kind: str, now: dt.datetime) -> str:
+    if kind == "hour":
+        return f"{now:%Y-%m-%dT%H}"
     if kind == "day":
         return f"{now:%Y-%m-%d}"
     if kind == "week":

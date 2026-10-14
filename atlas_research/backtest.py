@@ -8,13 +8,19 @@
   the stop fills at that open (gap), plus stop slippage.
 - One position per setup per symbol: signals during an open trade are skipped.
 - Commission and swap are charged in price units and converted to R.
+  ``exit_slippage`` (default 0) is charged on market exits that are not stops
+  (time exit, Friday flatten); target fills are limit orders and get none.
 - Optional Friday flatten closes at market at the first bar at/after the cutoff.
 - Optional ATR trail (PRD §18): once the best price since entry is
   ``atr_trail_after_r`` R in profit, the stop moves to best - mult x ATR at
   each decision-bar close, using only closed bars; it only ever tightens and
-  applies from the next minute. ``rr=None`` removes the fixed target.
+  applies from the next minute. ``rr=None`` removes the fixed target; then a
+  trail, a Friday flatten or an ``exit_by`` on every signal must close trades.
 - A signal may carry ``exit_by``: the trade closes at market at the first bar
   at/after that time if neither stop nor target has been hit (time exit).
+- ``reenter_at_exit_bar`` (default False) lets a new signal fill on the bar
+  where the previous trade time-exited (an exit and an opposite entry at the
+  same checkpoint, e.g. the noise-area strategy's reversals).
 """
 
 from __future__ import annotations
@@ -43,9 +49,11 @@ class CostModel:
     stop_slippage: float = 0.00002  # stop exits
     swap_per_rollover: float = 0.00005  # charged on both sides, conservative
     triple_swap_weekday: int = 2  # Wednesday rollover charges three nights
+    exit_slippage: float = 0.0  # market exits other than stops (time exit, Friday flatten); targets are limits
 
     def with_spread(self, mult: float) -> "CostModel":
-        return CostModel(mult, self.commission_rt, self.entry_slippage, self.stop_slippage, self.swap_per_rollover, self.triple_swap_weekday)
+        return CostModel(mult, self.commission_rt, self.entry_slippage, self.stop_slippage, self.swap_per_rollover,
+                         self.triple_swap_weekday, self.exit_slippage)
 
 
 @dataclass(frozen=True)
@@ -55,6 +63,7 @@ class ExitPolicy:
     max_entry_delay_min: int = 5
     atr_trail_mult: float | None = None
     atr_trail_after_r: float = 1.5
+    reenter_at_exit_bar: bool = False
 
 
 @dataclass(frozen=True)
@@ -108,8 +117,9 @@ def simulate(
         return pd.DataFrame(columns=TRADE_COLS)
     if exits.atr_trail_mult and trail is None:
         raise ValueError("an ATR trail needs the decision-bar TrailFrame")
-    if exits.rr is None and not (exits.atr_trail_mult or exits.friday_flatten_utc):
-        raise ValueError("no target, trail or flatten: nothing would ever close the trade")
+    timed = "exit_by" in signals and pd.to_datetime(signals["exit_by"], utc=True).notna().all()
+    if exits.rr is None and not (exits.atr_trail_mult or exits.friday_flatten_utc or timed):
+        raise ValueError("no target, trail, flatten or time exit: nothing would ever close the trade")
     p = path or M1Path(m1, costs.spread_mult)
     fri = p.friday_after(exits.friday_flatten_utc) if exits.friday_flatten_utc else None
     n = len(p.t)
@@ -136,7 +146,9 @@ def simulate(
                                              exits.atr_trail_mult, exits.atr_trail_after_r)
         else:
             j, exit_px, reason = _scan(p, i0, d, stop, target, fri, costs.stop_slippage, t_exit)
-        busy_until = p.t[j] + 1
+        if reason in ("time_exit", "friday_flatten"):
+            exit_px -= d * costs.exit_slippage
+        busy_until = p.t[j] + (0 if exits.reenter_at_exit_bar and reason == "time_exit" else 1)
         hi = p.bid_h if d == 1 else p.ask_h
         lo = p.bid_l if d == 1 else p.ask_l
         fav = (hi[i0 : j + 1].max() - entry) if d == 1 else (entry - lo[i0 : j + 1].min())

@@ -1,0 +1,1 @@
+Vendored from https://github.com/typesafe-ai/skills (skills/typesafe-ai), commit 65a39f393687675ce170e6094757de20370365b9, on 2026-10-06. MIT licensed (LICENSE). Update by copying the directory again; the live docs at docs.typesafe.ai stay the source of truth. ATLAS keeps every Jev question and threshold in atlas_engine/adapters/jev/questions.py.

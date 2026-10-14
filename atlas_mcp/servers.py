@@ -1,11 +1,11 @@
-"""The ATLAS MCP servers: atlas-market, atlas-backtest, atlas-journal, atlas-performance (H2)
-and atlas-operations (H3).
+"""The ATLAS MCP servers: atlas-market, atlas-backtest, atlas-journal, atlas-performance (H2),
+atlas-operations (H3) and atlas-trading (Hermes trading the demo account).
 
 Run one per stdio process, e.g. ``atlas-mcp-backtest``. Tool results are
 compact JSON computed by the API; an API refusal (scope, holdout, budget)
 comes back to the agent as a tool error carrying the API's message.
-atlas-operations talks to the engine API instead of the research API; its
-profile config points ATLAS_API_URL at the engine.
+atlas-operations and atlas-trading talk to the engine API instead of the
+research API; their profile config points ATLAS_API_URL at the engine.
 """
 
 from __future__ import annotations
@@ -183,12 +183,72 @@ def operations_server(api: Callable[..., dict]) -> MCPServer:
     return s
 
 
+def trading_server(api: Callable[..., dict]) -> MCPServer:
+    s = MCPServer("atlas-trading", instructions=(
+        "Trade the ATLAS demo account yourself. You decide the trade and say where the stop and target go and "
+        "why; the engine sizes it and runs every risk and prop-firm check, and may refuse it. Demo account only: "
+        "the engine refuses everything on a live account. You can close or tighten only positions you opened. "
+        "Nothing here can enable trading, change a limit or set a lot size."))
+
+    @s.tool()
+    def get_live_market(symbols: list[str], timeframe: Literal["M15", "H1", "H4", "D1"] = "H1",
+                        count: int = 100) -> dict:
+        """Live bid/ask, spread in pips (now and its recent median) and the last `count` closed bid bars
+        (1-300, newest last, UTC) from the broker, for up to 4 symbols the engine trades."""
+        return api("trading/market", symbols=symbols, timeframe=timeframe, count=count)
+
+    @s.tool()
+    def submit_trade_intent(intent_id: str, symbol: str, direction: Literal["buy", "sell"], stop: float,
+                            target: float, confidence: float, thesis: str) -> dict:
+        """Open one market trade on the demo account. stop and target are prices; the target must be 1-5
+        times as far from the price as the stop. confidence is your probability (0-1) that the target fills
+        before the stop: it is scored. thesis (40-2000 characters) says why this trade, now, and what would
+        prove it wrong. intent_id (4-48 characters) is yours to choose and makes a retry safe: the same id
+        never opens a second trade. The engine sizes the trade at its risk per trade and may refuse it
+        (trading disabled, health, a risk or firm limit, your daily limit); the reasons come back."""
+        return api("trading/submit_intent", intent_id=intent_id, symbol=symbol, direction=direction, stop=stop,
+                   target=target, confidence=confidence, thesis=thesis)
+
+    @s.tool()
+    def get_intent_status(intent_id: str) -> dict:
+        """What became of one of your intents: filled or refused and why, the ticket, and the result in R
+        once it closed."""
+        return api("trading/intent_status", intent_id=intent_id)
+
+    @s.tool()
+    def list_my_positions() -> dict:
+        """Your open demo positions with entry, stop, target, current price and open profit in R, plus how
+        many intents you have left today."""
+        return api("trading/positions")
+
+    @s.tool()
+    def close_my_position(ticket: int, reason: str) -> dict:
+        """Close one of your own positions at market. Give the reason (10-500 characters): what changed."""
+        return api("trading/close_position", ticket=ticket, reason=reason)
+
+    @s.tool()
+    def tighten_stop(ticket: int, new_stop: float, reason: str) -> dict:
+        """Move the stop of one of your own positions closer to the price. A stop never moves away from the
+        price, and at most once per minute. Give the reason (10-500 characters)."""
+        return api("trading/tighten_stop", ticket=ticket, new_stop=new_stop, reason=reason)
+
+    @s.tool()
+    def my_track_record() -> dict:
+        """Your closed demo trades in R after costs (expectancy, 95% interval, win rate, profit factor, worst
+        losing streak), how well your confidences matched outcomes, every rule-based setup on the same
+        account for comparison, and the verdict against the pre-declared gate."""
+        return api("trading/track_record")
+
+    return s
+
+
 SERVERS = {
     "atlas-market": market_server,
     "atlas-backtest": backtest_server,
     "atlas-journal": journal_server,
     "atlas-performance": performance_server,
     "atlas-operations": operations_server,
+    "atlas-trading": trading_server,
 }
 
 
@@ -214,3 +274,7 @@ def main_performance() -> None:
 
 def main_operations() -> None:
     _run("atlas-operations")
+
+
+def main_trading() -> None:
+    _run("atlas-trading")

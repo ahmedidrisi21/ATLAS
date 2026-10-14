@@ -1,1 +1,1 @@
-"""Broker adapters (PRD §25: adapters/mt5, later paper, replay and jev)."""
+"""Adapters from the engine to outside systems (PRD §25): mt5, paper, replay, jev."""

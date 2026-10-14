@@ -487,6 +487,28 @@ def agents_can_only_disable(tmp: Path):
     assert rep["status"] == "clean" and "interval_s" in rep and "reconciled_at" in rep
 
 
+def agent_trades_demo_only(tmp: Path):
+    """Hermes's trades take the full engine path, and only on a demo account (docs/hermes-trader.md)."""
+    from atlas_engine.config import load_engine_config
+
+    thesis = "drill: buying EURUSD on the retest of the London low with the dollar soft"
+    for demo in (True, False):
+        clock = Clock()
+        cfg = load_engine_config(REPO_CONFIG)
+        r = build(tmp / ("demo" if demo else "live"), clock, mt5=FakeMT5(clock, symbols=cfg.symbols, demo=demo))
+        r.enable()
+        t = r.adapter.tick("EURUSD")
+        out = r.engine.agent_submit("atlas-trading/atlas-trading", "drill-0001", "EURUSD", "buy", round(t.ask - 0.0015, 5),
+                                    round(t.ask + 0.0030, 5), 0.45, thesis)
+        if demo:
+            assert out["outcome"] == "filled" and out["volume"] > 0, out
+            [p] = r.mt5.positions_get()
+            assert p.sl and p.tp and p.magic == r.engine.settings.magic_base + r.engine.agent.magic_offset
+        else:
+            assert out["outcome"] == "refused" and out["reasons"] == ["not_a_demo_account"], out
+            assert not r.mt5.requests
+
+
 SCENARIOS = [
     ("clean entry: SL/TP broker-side, magic, client ID", "§21", clean_entry),
     ("duplicate decision sends nothing", "§21", duplicate_decision),
@@ -526,4 +548,5 @@ SCENARIOS = [
     ("drawdown stop: KILL", "§19, §23", drawdown_kill),
     ("operator commands: signature, age, replay", "§11 L4", operator_commands_are_authenticated),
     ("agents: read and disable only", "§11", agents_can_only_disable),
+    ("agent trades: full engine path, demo account only", "§6, §11", agent_trades_demo_only),
 ]

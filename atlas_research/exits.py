@@ -29,9 +29,10 @@ import pandas as pd
 
 from atlas_engine.features import sessions
 
-from .backtest import TRADE_COLS, CostModel, M1Path, count_rollovers
+from .backtest import NO_EXIT_BY, TRADE_COLS, CostModel, M1Path, count_rollovers
 
-MANAGED_COLS = TRADE_COLS + ["exit_variant", "bars_held", "stop_moves", "partial_r"]  # bars_held counts M15 bars with data
+# bars_held counts M15 bars with data. A signal's own exit_by (a time exit) applies to every variant, as in T0.
+MANAGED_COLS = TRADE_COLS + ["exit_variant", "bars_held", "stop_moves", "partial_r"]
 M15_NS = np.int64(15 * 60 * 1_000_000_000)
 
 
@@ -156,8 +157,10 @@ def simulate_managed(
     max_delay = np.int64(spec.max_entry_delay_min * 60 * 1_000_000_000)
     rows = []
     sig = signals.sort_values("decision_time")
-    cols = (pd.DatetimeIndex(sig["decision_time"]).as_unit("ns").asi8, sig["direction"], sig["stop"], sig["atr"], sig["setup"])
-    for dt_, d, stop, atr, setup in zip(*cols):
+    exit_by = (pd.DatetimeIndex(sig["exit_by"]).as_unit("ns").asi8 if "exit_by" in sig else np.full(len(sig), NO_EXIT_BY))
+    cols = (pd.DatetimeIndex(sig["decision_time"]).as_unit("ns").asi8, sig["direction"], sig["stop"], sig["atr"], sig["setup"],
+            exit_by)
+    for dt_, d, stop, atr, setup, t_exit in zip(*cols):
         i0 = int(np.searchsorted(p.t, dt_, side="left"))
         if i0 >= n or p.t[i0] - dt_ > max_delay or p.t[i0] < busy_until:
             continue
@@ -168,7 +171,7 @@ def simulate_managed(
         risk = d * (entry - stop)
         if risk <= 0:
             continue
-        tr = _manage(p, i0, d, entry, float(stop), risk, spec, costs, flat, fri, mgmt)
+        tr = _manage(p, i0, d, entry, float(stop), risk, spec, costs, flat, fri, mgmt, int(t_exit))
         j = tr["j"]
         busy_until = p.t[j] + 1
         hi = p.bid_h if d == 1 else p.ask_h
@@ -186,14 +189,15 @@ def simulate_managed(
         rows.append(
             (symbol, setup, d, pd.Timestamp(dt_, tz="UTC"), atr, entry_time, exit_time, entry, stop, target, tr["exit_px"],
              risk, tr["reason"], r_gross, cost_r, r_gross - cost_r, max(fav, 0.0) / risk, max(adv, 0.0) / risk,
-             p.ask_o[i0] - p.bid_o[i0], nights, spec.name, len(np.unique(p.t[i0 : j + 1] // M15_NS)), tr["moves"],
+             p.ask_o[i0] - p.bid_o[i0], nights,
+             pd.NaT if t_exit == NO_EXIT_BY else pd.Timestamp(t_exit, tz="UTC"), spec.name, len(np.unique(p.t[i0 : j + 1] // M15_NS)), tr["moves"],
              tr["partial_r"] if f else np.nan)
         )
     return pd.DataFrame(rows, columns=MANAGED_COLS)
 
 
 def _manage(p: M1Path, i0: int, d: int, entry: float, stop: float, risk: float, spec: ExitSpec, costs: CostModel,
-            flat: np.ndarray, fri: np.ndarray, mgmt: ManagementFrame | None) -> dict:
+            flat: np.ndarray, fri: np.ndarray, mgmt: ManagementFrame | None, t_exit: int = NO_EXIT_BY) -> dict:
     """Walk one trade forward, one M15 bar at a time. Returns the exit and what management did."""
     n = len(p.t)
     target = entry + d * spec.rr * risk if spec.rr is not None else None
@@ -210,7 +214,7 @@ def _manage(p: M1Path, i0: int, d: int, entry: float, stop: float, risk: float, 
         # Without M15 management, scan in large chunks instead (same result, far fewer steps).
         close_ns = (p.t[s] // M15_NS + 1) * M15_NS
         e = min(int(np.searchsorted(p.t, close_ns, side="left")), n) if mgmt is not None else min(s + 2048, n)
-        hit = _scan_segment(p, s, e, i0, d, stop, target, partial, flat, costs.stop_slippage)
+        hit = _scan_segment(p, s, e, i0, d, stop, target, partial, flat, costs.stop_slippage, t_exit=t_exit)
         if hit is not None and hit[2] == "partial":
             j = hit[0]
             out.update(partial_frac=spec.partial_frac, partial_r=d * (hit[1] - entry) / risk,
@@ -218,11 +222,12 @@ def _manage(p: M1Path, i0: int, d: int, entry: float, stop: float, risk: float, 
             partial = None
             # The rest of the bar that filled the partial: the stop was not touched there, so only the
             # target or a scheduled close can still fire.
-            hit = _scan_segment(p, j, e, i0, d, stop, target, None, flat, costs.stop_slippage, skip_stop_at=j)
+            hit = _scan_segment(p, j, e, i0, d, stop, target, None, flat, costs.stop_slippage, skip_stop_at=j,
+                                t_exit=t_exit)
         if hit is not None:
             reason = hit[2]
             if reason == "scheduled":
-                reason = "friday_flatten" if fri[hit[0]] else "session_exit"
+                reason = "friday_flatten" if fri[hit[0]] else "time_exit" if p.t[hit[0]] >= t_exit else "session_exit"
             elif reason in ("stop", "gap_stop") and out["moves"]:
                 reason = "managed_" + reason  # a breakeven or trailed stop, not the initial one
             return {**out, "j": hit[0], "exit_px": hit[1], "reason": reason}
@@ -245,7 +250,7 @@ def _manage(p: M1Path, i0: int, d: int, entry: float, stop: float, risk: float, 
 
 
 def _scan_segment(p: M1Path, s: int, e: int, i0: int, d: int, stop: float, target: float | None, partial: float | None,
-                  flat: np.ndarray, stop_slip: float, skip_stop_at: int | None = None):
+                  flat: np.ndarray, stop_slip: float, skip_stop_at: int | None = None, t_exit: int = NO_EXIT_BY):
     """First exit event in M1 bars [s, e): (index, price, reason) or None. Stop beats target in the same minute."""
     if e <= s:
         return None
@@ -257,7 +262,7 @@ def _scan_segment(p: M1Path, s: int, e: int, i0: int, d: int, stop: float, targe
         sl = p.ask_h[s:e] >= stop
         tp = p.ask_l[s:e] <= target if target is not None else np.zeros(e - s, bool)
         pt = p.ask_l[s:e] <= partial if partial is not None else np.zeros(e - s, bool)
-    fl = flat[s:e].copy()
+    fl = flat[s:e] | (p.t[s:e] >= t_exit)
     if s == i0:
         fl[0] = False  # never flatten on the entry bar itself
     if skip_stop_at is not None and skip_stop_at == s:

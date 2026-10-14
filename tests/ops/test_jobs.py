@@ -64,7 +64,7 @@ def test_halt_alerts_once_and_opens_one_incident_card(ops_dir, engine, client, c
     assert out.startswith("HALT: mt5_disconnected.") and "New trades: enabled." in out
     assert "Incident card t_1 opened on atlas-ops" in out
     [card] = cards.calls
-    assert card["board"] == "atlas-ops" and card["assignee"] == "operations-monitor" and card["tenant"] == "paper"
+    assert card["board"] == "atlas-ops" and card["assignee"] == "atlas-operations" and card["tenant"] == "paper"
     assert card["skills"] == ("incident-triage",) and card["key"].startswith("incident-2026-09-23-")
     assert "disable_trading" in card["body"] and "Never try to re-enable" in card["body"]
     # Same incident 15 minutes later: silent, no second card.
@@ -129,13 +129,13 @@ def test_incident_tenant_follows_engine_mode(ops_dir, engine, client, clock, car
 
 
 def test_relay_delivers_each_alert_once(ops_dir, clock):
-    store.alert("critical", "hooks", "operations-monitor DISABLED new trading: drill")
+    store.alert("critical", "hooks", "atlas-operations DISABLED new trading: drill")
     store.alert("info", "kanban", "atlas-ops card t1 done")
     out = jobs.alert_relay(clock())
     assert out.splitlines()[0] == "ATLAS: 2 alerts"
     assert "[CRITICAL]" in out and "DISABLED new trading" in out and "[INFO]" in out
     assert jobs.alert_relay(clock()) == ""
-    store.alert("warning", "hooks", "strategy-researcher was refused atlas-backtest.run_backtest (holdout_refused)")
+    store.alert("warning", "hooks", "atlas-research was refused atlas-backtest.run_backtest (holdout_refused)")
     assert jobs.alert_relay(clock()).splitlines()[0] == "ATLAS: 1 alert"
 
 
@@ -211,7 +211,7 @@ def test_reconciliation_report(ops_dir, engine, client, clock):
 ])
 def test_card_job_keys(period, when, key, cards):
     prefix = {"day": "daily-x", "week": "weekly-x", "month": "monthly-x"}[period]
-    spec = {"name": "atlas-x", "board": "atlas-research", "assignee": "jev-analyst", "period": period, "key": prefix,
+    spec = {"name": "atlas-x", "board": "atlas-research", "assignee": "atlas-models", "period": period, "key": prefix,
             "title": "Review", "body": "Do it.\n", "skills": ["backtest-analysis"]}
     assert jobs.card_job(spec, when, cards) == ""
     assert cards.calls[0]["key"] == key and cards.calls[0]["title"].startswith("Review (")
@@ -232,7 +232,7 @@ def test_calibration_key_matches_the_prd_example(cards):
 
 
 def test_http_client_against_the_ops_api(ops_dir, engine, clock, cards):
-    tokens = TokenStore([{"name": "operations-monitor/cron", "sha256": hash_token("cron-tok"), "scopes": ["ops:read"]}],
+    tokens = TokenStore([{"name": "atlas-operations/cron", "sha256": hash_token("cron-tok"), "scopes": ["ops:read"]}],
                         ENGINE_SCOPES)
     httpd = make_server(OpsService(engine), tokens, "127.0.0.1", 0, routes=OPS_ROUTES)
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
@@ -271,11 +271,11 @@ def test_kanban_create_command(monkeypatch, tmp_path):
 
     monkeypatch.setenv("ATLAS_HERMES_BIN", "/venv/bin/hermes")
     monkeypatch.setattr(jobs.subprocess, "run", fake_run)
-    assert jobs.kanban_create("atlas-ops", "Incident", "operations-monitor", "body", key="incident-k",
+    assert jobs.kanban_create("atlas-ops", "Incident", "atlas-operations", "body", key="incident-k",
                               tenant="paper", skills=("incident-triage",), created_by="om/hc") == "t_abc"
     cmd = seen["cmd"]
     assert cmd[:5] == ["/venv/bin/hermes", "kanban", "--board", "atlas-ops", "create"]
-    for flag, value in [("--assignee", "operations-monitor"), ("--idempotency-key", "incident-k"),
+    for flag, value in [("--assignee", "atlas-operations"), ("--idempotency-key", "incident-k"),
                         ("--tenant", "paper"), ("--skill", "incident-triage"), ("--created-by", "om/hc")]:
         assert cmd[cmd.index(flag) + 1] == value
     Proc.returncode, Proc.stderr = 2, "no such board"

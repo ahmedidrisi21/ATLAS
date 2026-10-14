@@ -1,0 +1,46 @@
+# FundedNext Futures, Flex Challenge, 50K. Checked 2026-10-05 against
+# FundedNext's futures help centre (helpfutures.fundednext.com) and the futures
+# challenge terms (updated 2026-09-25). Firms change terms: re-check before
+# each new evaluation. Changes only by a signed operator commit.
+
+firm: FundedNext Futures
+program: Flex 50K
+checked: "2026-10-05"
+
+daily_loss:
+  pct: null                    # Flex has no daily loss limit
+  includes_floating: true
+  reset_time: "17:00"          # the trading day and the end-of-day balance roll at 17:00 CT
+  reset_tz: America/Chicago
+
+max_loss:
+  pct: 3.0                     # $1,500 maximum loss limit (MLL)
+  type: trailing_eod           # trails the highest end-of-day balance
+  lock_at_initial: true        # stops trailing once it reaches initial + $100
+  lock_offset: 100
+
+phases:
+  challenge: {profit_target_pct: 5.0, min_trading_days: 0}  # $2,500; no minimum found in the pages read
+  funded: {profit_target_pct: null, min_trading_days: 0}
+
+trading_day: position_opened
+
+restrictions:                  # news trading is allowed; nothing may be held overnight or over the weekend
+  evaluation: {news_window_min: null, weekend_holding: false, max_market_break_hours: null}
+  funded: {news_window_min: null, weekend_holding: false, max_market_break_hours: null}
+
+futures:
+  contract_limit: {minis: 3, micros_per_mini: 10}  # 3 minis or 30 micros
+  tz: America/Chicago
+  flat_by: "15:10"             # all positions closed by 15:10 CT (the firm auto-closes then)
+  reopen: "17:00"
+  hedging_correlated: false    # no opposite positions in one asset group (e.g. long ES, short NQ)
+  min_bracket_ticks: 6         # trades in and out within 5 ticks are a prohibited pattern
+
+consistency_rule:              # challenge only: one day's profit may not exceed 40% of the target
+  max_day_profit_share: 0.40
+  phases: [challenge]
+
+max_lot: null
+eas_allowed: true              # bots and EAs allowed; HFT is not
+max_server_requests_per_day: null

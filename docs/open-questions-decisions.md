@@ -1,5 +1,10 @@
 # Open questions: decisions
 
+> **Superseded in part on 2026-10-05.** The owner moved ATLAS to futures first: CME micro and mini
+> futures through a prop firm (FundedNext Futures as the worked example), on NinjaTrader since 2026-10-06. That replaces
+> answers 2 (FTMO 2-Step, $10k), 4 (M15 forex bars) and 5 (FTMO's MT5 server and VPS region) below.
+> The forex path still works and is still tested. See `docs/futures.md`.
+
 Sep 22, 2026. Answers the "Open questions" list at the end of `ATLAS_v3_Hermes_Derived_PRD.md`. Questions 3 and 7 were answered by the owner; the others are Claude's recommendations, not yet overridden by the owner.
 
 | # | Question | Decision | Blocks |
@@ -61,6 +66,8 @@ The broker is whatever MT5 server FTMO assigns. Before T4, rent short-term Windo
 ## 6. Live agent trade intents
 
 No for v3, as §11 already argues. Revisit per strategy only after T9, through the promotion gate and operator signature.
+
+**Update 2026-10-05 (owner):** Hermes now trades the **demo** account itself, through the `trader` profile and `atlas-trading`, with every trade going through the engine's risk checks (docs/hermes-trader.md). Live agent trading stays a no for v3; the engine refuses agent trades on anything but a demo account.
 
 ## 7. Operator and approvals
 

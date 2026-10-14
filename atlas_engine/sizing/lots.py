@@ -1,11 +1,14 @@
-"""Lot sizing from a risk budget (PRD §20).
+"""Lot and contract sizing from a risk budget (PRD §20).
 
     lots = (equity x risk% x m) / ((SL_distance / tick_size) x tick_value)
 
 Rounded down to ``volume_step``, clamped to the symbol's and the firm's
 limits, and rejected when ``volume_min`` would overshoot the budget by more
-than ``max_overshoot``. In T4 the MT5 adapter fills ``ContractSpec`` from
-``symbol_info()``; the static table below is for research and tests.
+than ``max_overshoot``. For a futures contract ``volume_step`` is 1 and
+``contract_size`` is the value per point, so this is
+``floor(allowed_risk / (stop_ticks x tick_value + commission))`` contracts.
+The live adapter fills ``ContractSpec`` from the broker; the static tables
+(below, and ``atlas_engine.futures``) are for research and tests.
 """
 
 from __future__ import annotations
@@ -28,6 +31,7 @@ class ContractSpec:
     volume_max: float = 100.0
     commission_per_lot: float = 0.0  # round turn, account currency; counted in the risk
     tick_value_loss: float | None = None  # MT5 trade_tick_value_loss when the broker reports it
+    asset_class: str = "fx"  # fx | future: a future is one exposure leg (its asset group), not two currencies
 
     def tick_value(self, account_ccy: str, rates: dict[str, float] | None = None) -> float:
         """Value of one tick for one lot, in account currency."""
@@ -47,8 +51,13 @@ CONTRACTS: dict[str, ContractSpec] = {
 
 
 def contract(symbol: str) -> ContractSpec:
-    try:
+    """The static spec for a forex pair or metal, or for a futures product (``MES``) or contract (``MESZ6``)."""
+    if symbol.upper() in CONTRACTS:
         return CONTRACTS[symbol.upper()]
+    from atlas_engine.futures.contracts import product  # futures catalogue; imports this module
+
+    try:
+        return product(symbol).spec()
     except KeyError:
         raise KeyError(f"no contract spec for {symbol!r}") from None
 
